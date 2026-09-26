@@ -117,6 +117,9 @@ h2 { font-size: 15px; margin: 0; font-weight: 650; }
 .tag.warn { background: var(--warn-soft); color: var(--warn); }
 .tag.bad { background: var(--danger-soft); color: var(--danger); }
 .tag.new { background: var(--accent-soft); color: var(--accent-text); }
+.tag.pend { background: var(--warn-soft); color: var(--warn); display: inline-flex; align-items: center; gap: 5px; }
+.tag.pend::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--warn); }
+.pkg.shadowed .name, .pkg.shadowed .desc { color: var(--faint); }
 .empty { padding: 40px 20px; text-align: center; color: var(--faint); }
 
 .switch { position: relative; width: 38px; height: 22px; border-radius: 999px; background: var(--line-strong); transition: background .15s; flex: none; }
@@ -190,6 +193,12 @@ const L = {
     selected: n => `已选 ${n} 个`, enable: "启用", disable: "停用", update: "更新", remove: "卸载", clearSel: "取消选择", openDir: "打开目录", reinstall: "重新安装",
     enabled: "已启用", disabled: "已停用", missing: "未安装", updateAvail: "有更新", filtered: "部分资源", filteredTip: "用 pi config 只加载了其中一部分资源", self: "插件管理器",
     selfTip: "插件管理器不能在这里停用或卸载，请在终端用 pi remove", local: "本地", npm: "npm", git: "git",
+    pending: { added: "新安装 · 重新加载后生效", enabled: "重新加载后启用", disabled: "重新加载后停用", changed: "改动重新加载后生效", updated: "已更新 · 重新加载后生效" },
+    pendingTip: "pi 现在运行的还是改动前的状态，重新加载后才会变",
+    overridden: "被项目覆盖", overriddenTip: "当前项目也配置了这个插件，pi 用的是项目里的那一份。这里的开关只影响其他项目。",
+    overrides: "覆盖全局", overridesTip: "全局设置里也有这个插件，在这个项目里以这一份为准。",
+    overriddenRes: "在这个项目里由项目中的同一插件提供",
+    removedNote: names => `已卸载，但在重新加载前仍在运行：${names}`,
     resTypes: { extensions: "扩展", skills: "技能", prompts: "提示模板", themes: "主题" }, noRes: "没有可加载的资源", showFiles: "查看文件", hideFiles: "收起",
     empty: "还没有安装任何插件，在上面填写来源安装，或去「发现插件」看看。", noMatch: "没有匹配的插件",
     confirmRemove: names => `卸载 ${names}？\n\n会删除下载的文件，并从设置中移除。本地路径的插件只会从设置中移除，不会删除你的文件。`,
@@ -216,6 +225,12 @@ const L = {
     selected: n => `${n} selected`, enable: "Enable", disable: "Disable", update: "Update", remove: "Uninstall", clearSel: "Clear", openDir: "Show files", reinstall: "Reinstall",
     enabled: "enabled", disabled: "disabled", missing: "not installed", updateAvail: "update", filtered: "partial", filteredTip: "Only some resources load, set with pi config", self: "this manager",
     selfTip: "The package manager cannot disable or remove itself here; use pi remove in a terminal", local: "local", npm: "npm", git: "git",
+    pending: { added: "installed · loads on reload", enabled: "enables on reload", disabled: "disables on reload", changed: "applies on reload", updated: "updated · applies on reload" },
+    pendingTip: "pi is still running the previous state; reload to apply",
+    overridden: "overridden by project", overriddenTip: "This project configures the same package, and pi uses that copy here. This toggle only affects other projects.",
+    overrides: "overrides global", overridesTip: "Your global settings have this package too; this copy wins in this project.",
+    overriddenRes: "Provided by the project's copy in this project",
+    removedNote: names => `Uninstalled, but still running until reload: ${names}`,
     resTypes: { extensions: "extensions", skills: "skills", prompts: "prompts", themes: "themes" }, noRes: "No loadable resources", showFiles: "Show files", hideFiles: "Hide",
     empty: "No packages yet. Install one above, or browse Discover.", noMatch: "No packages match",
     confirmRemove: names => `Uninstall ${names}?\n\nDownloaded files are deleted and the settings entry is removed. Local-path packages are only removed from settings; your files stay.`,
@@ -255,7 +270,7 @@ async function api(path, body, signal) {
 const params = new URLSearchParams(location.search);
 const S = {
   tab: params.get("tab") === "discover" ? "discover" : "installed",
-  packages: [], trusted: false, cwd: "", loaded: false, error: "",
+  packages: [], removed: [], trusted: false, cwd: "", loaded: false, error: "",
   updates: null, checking: false,
   filter: "", view: "all", selected: new Set(), open: new Set(),
   status: { busy: false, pendingReload: false, canReload: false, jobs: [] },
@@ -269,7 +284,7 @@ const S = {
 async function loadPackages() {
   try {
     const d = await api("/packages");
-    Object.assign(S, { packages: d.packages, trusted: d.trusted, cwd: d.cwd, loaded: true, error: "" });
+    Object.assign(S, { packages: d.packages, removed: d.removed || [], trusted: d.trusted, cwd: d.cwd, loaded: true, error: "" });
     if (d.updates) S.updates = d.updates;
     S.status.pendingReload = d.pendingReload;
     const keys = new Set(d.packages.map(key));
@@ -457,6 +472,7 @@ function renderInstalled() {
       ${sel.some(hasUpdate) ? `<button class="btn small primary" data-bulk="update">${esc(L.update)}</button>` : ""}
       <button class="btn small danger" data-bulk="remove">${esc(L.remove)}</button>
       <button class="btn small ghost" data-bulk="clear">${esc(L.clearSel)}</button></div>` : ""}
+    ${S.removed.length ? `<div class="notice" title="${esc(S.removed.map(r => r.source).join("\n"))}">${esc(L.removedNote(S.removed.map(r => r.source.replace(/^(npm:|git:)/, "").replace(/[\\/]+$/, "").replace(/(.)@[^/]*$/, "$1").split(/[\\/]/).pop()).join(LANG === "zh" ? "、" : ", ")))}</div>` : ""}
     <div class="list">${!S.loaded ? `<div class="empty"><span class="spin"></span></div>` : !S.packages.length ? `<div class="empty">${esc(L.empty)}</div>` : !list.length ? `<div class="empty">${esc(L.noMatch)}</div>` : list.map(pkgRow).join("")}</div>`;
   $("src").value = typed;
   if (focus && $(focus)) { $(focus).focus(); try { if (caret != null) $(focus).setSelectionRange(caret, caret); } catch {} }
@@ -472,13 +488,16 @@ function pkgRow(p) {
     p.filtered ? `<span class="tag warn" title="${esc(L.filteredTip)}">${esc(L.filtered)}</span>` : "",
     upd ? `<span class="tag new">${esc(L.updateAvail)}</span>` : "",
     p.self ? `<span class="tag" title="${esc(L.selfTip)}">${esc(L.self)}</span>` : "",
+    p.overridden ? `<span class="tag warn" title="${esc(L.overriddenTip)}">${esc(L.overridden)}</span>` : "",
+    p.overrides ? `<span class="tag project" title="${esc(L.overridesTip)}">${esc(L.overrides)}</span>` : "",
+    p.pending ? `<span class="tag pend" title="${esc(L.pendingTip)}">${esc(L.pending[p.pending])}</span>` : "",
   ].join("");
   const summary = res.length
     ? res.map(([t, r]) => `${r.length} ${esc(L.resTypes[t])}`).join(" · ") + ` <button data-files="${esc(k)}">${esc(S.open.has(k) ? L.hideFiles : L.showFiles)}</button>`
-    : p.installed ? esc(L.noRes) : "";
+    : p.overridden ? esc(L.overriddenRes) : p.installed ? esc(L.noRes) : "";
   const files = S.open.has(k) && res.length ? `<div class="files">${res.map(([t, r]) => `<div><div class="t">${esc(L.resTypes[t])}</div>${r.map(f => `<code class="${f.enabled ? "" : "off"}">${esc(f.path)}</code>`).join("")}</div>`).join("")}</div>` : "";
   const homepage = p.homepage ? ` · <a href="${esc(p.homepage)}" target="_blank" rel="noopener noreferrer">${esc(L.home)}</a>` : "";
-  return `<div class="pkg ${on ? "" : "off"}" data-key="${esc(k)}">
+  return `<div class="pkg ${on ? "" : "off"} ${p.overridden ? "shadowed" : ""}" data-key="${esc(k)}">
     <input type="checkbox" data-sel="${esc(k)}" ${S.selected.has(k) ? "checked" : ""}>
     <div>
       <div class="head"><span class="name">${esc(p.name)}</span>${p.version ? `<span class="ver">${esc(p.version)}</span>` : ""}${tags}</div>

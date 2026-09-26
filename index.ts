@@ -23,8 +23,9 @@ export default function piManage(pi: ExtensionAPI): void {
     manage.loaded();
     manage.session = {
       idle: () => ctx.isIdle(),
-      // Only command handlers may reload, so the page goes through /manage reload.
-      reload: () => pi.sendUserMessage("/manage reload", { expandPromptTemplates: true }),
+      // Only command handlers may reload, so the page goes through /manage reload. Reloading stops the web
+      // server, so start it only after the page has its answer.
+      reload: () => { setTimeout(() => pi.sendUserMessage("/manage reload", { expandPromptTemplates: true }), 100); },
     };
     // Mount early (no server yet) so the other pi-web pages link here.
     hub().mount(manage);

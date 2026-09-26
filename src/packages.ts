@@ -1,4 +1,6 @@
 import { DefaultPackageManager, type PackageSource, SettingsManager } from "@earendil-works/pi-coding-agent";
+
+export type { PackageSource };
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -30,6 +32,10 @@ export interface PackageInfo {
   filtered: boolean;
   /** The package manager itself. */
   self: boolean;
+  /** A global entry that pi skips because this project configures the same package. */
+  overridden: boolean;
+  /** A project entry that replaces the global entry for the same package. */
+  overrides: boolean;
   resources: Record<ResourceType, Resource[]>;
 }
 
@@ -129,10 +135,10 @@ export class PackageService {
     ];
   }
 
-  /** Changes whenever a package is added, removed or filtered; compared to know when pi needs a reload. */
-  signature(): string {
+  /** Every configured entry by scope + source, to compare against what the running pi loaded. */
+  snapshot(): Record<string, PackageSource> {
     const { settings, trusted } = this.managers();
-    return JSON.stringify(this.entries(settings, trusted));
+    return Object.fromEntries(this.entries(settings, trusted).map(({ scope, entry }) => [packageKey(scope, sourceOf(entry)), entry]));
   }
 
   private isSelf(path: string | undefined): boolean {
@@ -143,8 +149,14 @@ export class PackageService {
     const { settings, pm, cwd, trusted } = this.managers();
     // "skip": listing must never install what is missing.
     const resolved = await pm.resolve(async () => "skip").catch(() => undefined);
-    const packages = this.entries(settings, trusted).map(({ scope, entry }): PackageInfo => {
-      const source = sourceOf(entry);
+    const entries = this.entries(settings, trusted);
+    // pi keeps one entry per package: a project entry replaces the global one, unless it is an autoload:false delta over it.
+    const identity = (scope: Scope, source: string) => packageIdentity(pm, source, scope, this.opts.agentDir, this.opts.context().cwd);
+    const replacing = new Set(entries.filter(e => e.scope === "project" && !(typeof e.entry === "object" && e.entry.autoload === false))
+      .map(e => identity("project", sourceOf(e.entry))));
+    const globalIds = new Set(entries.filter(e => e.scope === "user").map(e => identity("user", sourceOf(e.entry))));
+    const packages = entries.map(({ scope, entry }): PackageInfo => {
+      const source = sourceOf(entry), id = identity(scope, source);
       let path: string | undefined;
       try { path = pm.getInstalledPath(source, scope); } catch {}
       const meta = manifest(path);
@@ -163,6 +175,8 @@ export class PackageService {
         version: meta.version, description: meta.description, homepage: meta.homepage,
         path, installed: !!path, enabled: !isDisabled(entry), filtered: typeof entry === "object" && !isDisabled(entry),
         self: this.isSelf(path), resources,
+        overridden: scope === "user" && replacing.has(id),
+        overrides: scope === "project" && replacing.has(id) && globalIds.has(id),
       };
     });
     return { packages, cwd, trusted };
@@ -275,3 +289,20 @@ export class PackageService {
 }
 
 export const packageKey = (scope: string, source: string) => `${scope}\n${source}`;
+
+/**
+ * The identity pi dedupes packages by: npm name, git host/path, or resolved local path.
+ * Uses pi's own (private) method when it is there, so the page agrees with what pi loads.
+ */
+export function packageIdentity(pm: DefaultPackageManager, source: string, scope: Scope, agentDir: string, cwd: string): string {
+  const own = (pm as unknown as { getPackageIdentity?: (s: string, sc: Scope) => string }).getPackageIdentity;
+  if (typeof own === "function") { try { return own.call(pm, source, scope); } catch {} }
+  const kind = kindOf(source);
+  if (kind === "npm") return `npm:${source.slice(4).replace(/(.)@[^/]*$/, "$1")}`;
+  if (kind === "git") {
+    const url = source.replace(/^git:/, "").replace(/^[a-z]+:\/\//i, "").replace(/^[^@/]+@/, "").replace(":", "/");
+    return `git:${url.replace(/@[^/]*$/, "").replace(/\.git$/, "").replace(/\/+$/, "").toLowerCase()}`;
+  }
+  const home = process.env.HOME ?? "";
+  return `local:${resolve(scope === "user" ? agentDir : join(cwd, ".pi"), source.replace(/^~(?=$|[\\/])/, home))}`;
+}

@@ -58,6 +58,7 @@ pi install git:github.com/woertedetiankong/pi-mange     # 或本地路径：pi i
 npm install
 npm run check   # tsc
 npm test        # node --test，用 devDependencies 里的 pi 命令行和临时目录，不联网、不碰你的设置
+npm run e2e     # 在真实的 pi（RPC 模式、临时目录）里走一遍：/manage url → 页面安装 → 点「重新加载」→ 新插件生效
 ```
 
 ## License

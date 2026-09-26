@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import type { WebApp, WebHub, WebLanguage, WebRequest } from "./hub.ts";
 import { type Lang, localize, ManageError, requestLang } from "./i18n.ts";
-import { normalizeSource, packageKey, type PackageService, type Scope } from "./packages.ts";
+import { isDisabled, normalizeSource, type PackageInfo, packageKey, type PackageService, type PackageSource, type Scope } from "./packages.ts";
 
 export interface ManageOptions {
   hub: WebHub;
@@ -33,6 +33,9 @@ export interface Job {
 
 const MAX_JOBS = 30, MAX_LOG = 400;
 
+/** How a package differs from what the running pi loaded; applies after a reload. */
+export type Pending = "added" | "enabled" | "disabled" | "changed" | "updated";
+
 /** The package manager page and API, mounted on the shared pi-web hub at /manage/ and /api/manage/. */
 export class ManageApp implements WebApp {
   readonly id = "manage";
@@ -44,9 +47,9 @@ export class ManageApp implements WebApp {
 
   private readonly opts: ManageOptions;
   /** Package configuration when this runtime loaded; any difference means pi needs a reload. */
-  private baseline: string;
-  /** Set by updates, which change code without changing configuration. */
-  private changed = false;
+  private baseline: Record<string, PackageSource>;
+  /** Packages updated since then: new code, same configuration. */
+  private updated = new Set<string>();
   private jobs: Job[] = [];
   private nextId = 1;
   /** Every change to packages runs here, one at a time: the pi CLI and this page edit the same settings file. */
@@ -56,15 +59,34 @@ export class ManageApp implements WebApp {
   constructor(opts: ManageOptions) {
     this.opts = opts;
     this.service = opts.service;
-    this.baseline = this.safeSignature();
+    this.baseline = this.safeSnapshot();
   }
 
-  private safeSignature(): string { try { return this.service.signature(); } catch { return ""; } }
+  private safeSnapshot(): Record<string, PackageSource> { try { return this.service.snapshot(); } catch { return {}; } }
 
   /** A new runtime has loaded whatever is configured now. */
-  loaded(): void { this.baseline = this.safeSignature(); this.changed = false; }
+  loaded(): void { this.baseline = this.safeSnapshot(); this.updated.clear(); }
 
-  pendingReload(): boolean { return this.changed || this.safeSignature() !== this.baseline; }
+  private pendingFor(key: string, entry: PackageSource | undefined): Pending | undefined {
+    const was = this.baseline[key];
+    if (entry === undefined) return undefined;
+    if (was === undefined) return "added";
+    if (JSON.stringify(was) !== JSON.stringify(entry)) return isDisabled(was) === isDisabled(entry) ? "changed" : isDisabled(entry) ? "disabled" : "enabled";
+    return this.updated.has(key) ? "updated" : undefined;
+  }
+
+  /** Per package changes, plus packages removed from settings that pi still has loaded. */
+  private pending(now = this.safeSnapshot()): { byKey: Map<string, Pending>; removed: { scope: Scope; source: string }[] } {
+    const byKey = new Map<string, Pending>();
+    for (const [key, entry] of Object.entries(now)) { const p = this.pendingFor(key, entry); if (p) byKey.set(key, p); }
+    const removed = Object.keys(this.baseline).filter(k => !(k in now)).map(k => {
+      const [scope, ...rest] = k.split("\n");
+      return { scope: scope as Scope, source: rest.join("\n") };
+    });
+    return { byKey, removed };
+  }
+
+  pendingReload(): boolean { const p = this.pending(); return p.byKey.size > 0 || p.removed.length > 0; }
 
   busy(): boolean { return this.jobs.some(j => j.state === "queued" || j.state === "running"); }
 
@@ -103,6 +125,8 @@ export class ManageApp implements WebApp {
       try {
         await this.service.runPi(args, line => { job.log.push(line); if (job.log.length > MAX_LOG) job.log.splice(1, job.log.length - MAX_LOG); });
         job.state = "done";
+        if (action === "update") this.updated.add(packageKey(scope, source!));
+        if (action === "updateAll") for (const k of Object.keys(this.safeSnapshot())) this.updated.add(k);
         if (this.updates && action !== "install") {
           this.updates.keys = action === "updateAll" ? [] : this.updates.keys.filter(k => !k.endsWith(`\n${source}`));
         }
@@ -111,8 +135,6 @@ export class ManageApp implements WebApp {
         job.error = localize(e, lang);
       } finally {
         job.finished = new Date().toISOString();
-        // Even a failed run may have changed files on disk.
-        this.changed = true;
       }
     });
     return job;
@@ -131,8 +153,9 @@ export class ManageApp implements WebApp {
     switch (`${req.method} ${req.path}`) {
       case "GET /status": return this.status();
       case "GET /packages": {
-        const list = await this.service.list();
-        return { ...list, updates: this.updates, pendingReload: this.pendingReload(), busy: this.busy() };
+        const list = await this.service.list(), { byKey, removed } = this.pending();
+        const packages: (PackageInfo & { pending?: Pending })[] = list.packages.map(p => ({ ...p, pending: byKey.get(packageKey(p.scope, p.source)) }));
+        return { ...list, packages, removed, updates: this.updates, pendingReload: byKey.size > 0 || removed.length > 0, busy: this.busy() };
       }
       case "GET /job": {
         const job = this.jobs.find(j => j.id === Number(req.query.get("id")));

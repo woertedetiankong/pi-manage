@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { after, before, test } from "node:test";
 import { createHub, type WebHub } from "../src/hub.ts";
-import { isDisabled, normalizeSource, PackageService, type ManageContext } from "../src/packages.ts";
+import { isDisabled, normalizeSource, packageIdentity, PackageService, type ManageContext } from "../src/packages.ts";
 import { ManageApp } from "../src/server.ts";
 
 // The child pi CLI inherits these: no catalog refresh, no telemetry.
@@ -111,6 +111,18 @@ test("normalizeSource accepts what people paste", () => {
   assert.throws(() => normalizeSource("a\nb"), /badSource/);
 });
 
+test("the fallback package identity matches pi's rules", () => {
+  const id = (source: string, scope: "user" | "project" = "user") => packageIdentity({} as any, source, scope, "/agent", "/work");
+  assert.equal(id("npm:@scope/pi-foo@1.2.0"), "npm:@scope/pi-foo");
+  assert.equal(id("npm:pi-foo"), "npm:pi-foo");
+  assert.equal(id("git:github.com/User/Repo@v1"), "git:github.com/user/repo");
+  assert.equal(id("https://github.com/user/repo.git"), "git:github.com/user/repo");
+  assert.equal(id("git:git@github.com:user/repo"), "git:github.com/user/repo");
+  assert.equal(id("ssh://git@github.com/user/repo"), "git:github.com/user/repo");
+  assert.equal(id("../pkgs/beta"), "local:/pkgs/beta");
+  assert.equal(id("./beta", "project"), "local:/work/.pi/beta");
+});
+
 test("the page is served and starts with nothing to reload", async () => {
   const page = await fetch(new URL(hub.url("manage")!).origin + "/manage/");
   assert.equal(await page.text(), "<p>manage</p>");
@@ -140,12 +152,28 @@ test("install runs the pi CLI, lists the package with its resources and asks for
   assert.equal((await call("/status")).data.pendingReload, true);
 });
 
+test("each row says what changes on reload", async () => {
+  // As if pi reloaded with alpha installed.
+  app.loaded();
+  assert.equal((await call("/status")).data.pendingReload, false);
+  const p = await byName("alpha");
+  assert.equal(p.pending, undefined);
+  await call("/disable", { scope: "user", source: p.source });
+  assert.equal((await byName("alpha")).pending, "disabled");
+  assert.equal((await call("/status")).data.pendingReload, true);
+  // Back to what pi loaded: nothing pending.
+  await call("/enable", { scope: "user", source: p.source });
+  assert.equal((await byName("alpha")).pending, undefined);
+  assert.equal((await call("/status")).data.pendingReload, false);
+});
+
 test("a failed install reports the CLI output", async () => {
   const { data } = await call("/install", { source: join(dir, "does-not-exist") }, "en");
   const job = await waitJob(data.job.id);
   assert.equal(job.state, "error");
   assert.match(job.error, /^Command failed \(exit \d+\)$/);
   assert.ok(job.log.length > 1, "the CLI's own explanation is in the log");
+  assert.equal((await call("/status")).data.pendingReload, false, "a failed install changes nothing pi has to reload");
 });
 
 test("disable keeps the package installed and restores custom filters on enable", async () => {
@@ -194,6 +222,7 @@ test("the manager never disables or removes itself", async () => {
   writeFileSync(join(agentDir, "settings.json"), JSON.stringify(settings));
   const p = await byName("pi-manage");
   assert.equal(p.self, true);
+  assert.equal(p.pending, "added");
   const off = await call("/disable", { scope: "user", source: self }, "en");
   assert.equal(off.status, 409);
   assert.match(off.data.error, /cannot disable or uninstall itself/);
@@ -207,6 +236,8 @@ test("remove drops the settings entry; local files stay", async () => {
   assert.equal((await waitJob(data.job.id)).state, "done");
   assert.equal(await byName("alpha"), undefined);
   assert.ok(readFileSync(join(alpha, "package.json")));
+  // Still loaded in the running pi until it reloads.
+  assert.deepEqual((await call("/packages")).data.removed, [{ scope: "user", source: p.source }]);
 });
 
 test("unknown packages, local updates and untrusted projects are refused", async () => {
@@ -239,6 +270,26 @@ test("trusted projects get their own packages", async () => {
   } finally { context = { cwd, trusted: false }; }
   // Untrusted again: project packages are neither listed nor editable.
   assert.equal((await packages()).some(p => p.scope === "project"), false);
+});
+
+test("a project copy of a global package is labelled on both sides", async () => {
+  context = { cwd, trusted: true };
+  const projectFile = join(cwd, ".pi", "settings.json");
+  try {
+    writeFileSync(projectFile, JSON.stringify({ packages: [beta] }));
+    let list = (await call("/packages")).data.packages.filter((p: any) => p.name === "beta");
+    const user = list.find((p: any) => p.scope === "user"), project = list.find((p: any) => p.scope === "project");
+    assert.deepEqual([user.overridden, user.overrides], [true, false], "pi loads the project copy instead");
+    assert.deepEqual([project.overridden, project.overrides], [false, true]);
+    assert.equal(user.resources.extensions.length, 0);
+    // autoload:false narrows the global entry instead of replacing it.
+    writeFileSync(projectFile, JSON.stringify({ packages: [{ source: beta, autoload: false }] }));
+    list = (await call("/packages")).data.packages.filter((p: any) => p.name === "beta");
+    assert.ok(list.every((p: any) => !p.overridden && !p.overrides));
+  } finally {
+    writeFileSync(projectFile, JSON.stringify({ packages: [] }));
+    context = { cwd, trusted: false };
+  }
 });
 
 test("search asks the registry for pi-package", async () => {

@@ -1,6 +1,6 @@
 {
   "name": "pi-manage",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Manage pi packages from a web page: one-click install, uninstall, enable, disable and update",
   "type": "module",
   "license": "MIT",
@@ -26,7 +26,8 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "node --test --disable-warning=ExperimentalWarning test/*.test.ts"
+    "test": "node --test --disable-warning=ExperimentalWarning test/*.test.ts",
+    "e2e": "node scripts/e2e.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
