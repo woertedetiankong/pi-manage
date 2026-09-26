@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi 插件</title>
+<script src="/hub.js"></script>
+<style>
+:root {
+  --bg: #f6f6f3; --panel: #ffffff; --side: #efefea; --line: #e4e3dc; --line-strong: #d3d2c9;
+  --text: #1f1f1c; --muted: #6d6c64; --faint: #9c9b92;
+  --accent: #3d5afe; --accent-soft: #e8ecff; --accent-text: #2a3fc2;
+  --ok: #2e9d6a; --ok-soft: #e3f4ea; --warn: #c98a12; --warn-soft: #fbf1dc; --danger: #d4453b; --danger-soft: #fbe7e5;
+  --user: #f1f0ea; --shadow: 0 1px 2px rgba(20,20,10,.05), 0 4px 16px rgba(20,20,10,.04);
+  --r: 10px;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161615; --panel: #1e1e1c; --side: #1a1a18; --line: #2c2c29; --line-strong: #3a3a36;
+    --text: #ecebe6; --muted: #a09f97; --faint: #6f6e67;
+    --accent: #7b8cff; --accent-soft: #262b4a; --accent-text: #aab6ff;
+    --ok: #4cc38a; --ok-soft: #1c3328; --warn: #e0a83a; --warn-soft: #3a2f16; --danger: #f07167; --danger-soft: #3d2220;
+    --user: #262624; --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161615; --panel: #1e1e1c; --side: #1a1a18; --line: #2c2c29; --line-strong: #3a3a36;
+  --text: #ecebe6; --muted: #a09f97; --faint: #6f6e67;
+  --accent: #7b8cff; --accent-soft: #262b4a; --accent-text: #aab6ff;
+  --ok: #4cc38a; --ok-soft: #1c3328; --warn: #e0a83a; --warn-soft: #3a2f16; --danger: #f07167; --danger-soft: #3d2220;
+  --user: #262624; --shadow: none;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text); font: 14px/1.55 var(--sans); -webkit-font-smoothing: antialiased; min-height: 100vh; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; padding: 0; }
+input, select { font: inherit; color: var(--text); }
+code, .mono { font: 12.5px var(--mono); }
+a { color: var(--accent-text); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+header { position: sticky; top: 0; z-index: 10; height: 56px; display: flex; align-items: center; gap: 14px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); min-width: 0; }
+.brand { font-weight: 650; letter-spacing: .2px; white-space: nowrap; display: flex; align-items: center; gap: 8px; }
+.pi-web-multi .brand-name { display: none; }
+.brand .logo { width: 22px; height: 22px; border-radius: 6px; background: var(--accent); color: #fff; display: grid; place-items: center; font-size: 13px; }
+#pi-web-nav { min-width: 0; overflow-x: auto; }
+.spacer { flex: 1; }
+.pending { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px; border-radius: 999px; background: var(--warn-soft); color: var(--text); font-size: 12.5px; white-space: nowrap; }
+.pending .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); flex: none; }
+
+.btn { height: 32px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--line-strong); font-size: 13px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; color: var(--text); background: var(--panel); }
+.btn:hover { background: var(--bg); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.08); background: var(--accent); }
+.btn.danger { color: var(--danger); }
+.btn.danger:hover { background: var(--danger-soft); }
+.btn.small { height: 28px; font-size: 12.5px; padding: 0 10px; }
+.btn.ghost { border-color: transparent; color: var(--muted); background: none; }
+.btn.ghost:hover { color: var(--text); background: var(--bg); }
+.btn:disabled { opacity: .5; cursor: default; }
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; flex: none; }
+.seg button { padding: 5px 12px; font-size: 13px; color: var(--muted); white-space: nowrap; background: var(--panel); }
+.seg button + button { border-left: 1px solid var(--line-strong); }
+.seg button.on { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.seg .n { font: 11.5px var(--mono); opacity: .8; margin-left: 4px; }
+.spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -1px; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+input.text, select { height: 32px; border: 1px solid var(--line-strong); border-radius: 7px; padding: 0 10px; background: var(--bg); outline: none; min-width: 0; }
+select { background: var(--panel); padding: 0 8px; }
+input.text:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.wrap { max-width: 980px; margin: 0 auto; padding: 22px 24px 80px; }
+h1 { font-size: 20px; margin: 0 0 4px; font-weight: 700; }
+h2 { font-size: 15px; margin: 0; font-weight: 650; }
+.lead { color: var(--muted); margin: 0 0 18px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); padding: 16px 18px; margin-bottom: 14px; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.muted { color: var(--muted); } .faint { color: var(--faint); font-size: 12.5px; }
+.error { padding: 9px 12px; border-radius: 8px; background: var(--danger-soft); color: var(--danger); font-size: 13px; margin: 8px 0; }
+.notice { padding: 9px 12px; border-radius: 8px; background: var(--warn-soft); font-size: 13px; margin: 8px 0; }
+
+.tabs { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.install .row input.text { flex: 1; min-width: 180px; }
+.install .hint { margin-top: 8px; }
+.install .hint code { background: var(--user); border-radius: 4px; padding: 1px 5px; }
+
+.toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 10px; }
+.toolbar input.text { flex: 1; min-width: 160px; }
+.bulk { position: sticky; top: 64px; z-index: 5; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px 8px 14px; margin-bottom: 10px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-text); box-shadow: var(--shadow); }
+.bulk strong { margin-right: auto; }
+
+.list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden; }
+.pkg { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; gap: 4px 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); align-items: start; }
+.pkg:last-child { border-bottom: 0; }
+.pkg.off .name, .pkg.off .desc { color: var(--muted); }
+.pkg > input { margin-top: 4px; accent-color: var(--accent); width: 15px; height: 15px; }
+.pkg .head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.pkg .name { font-weight: 650; font-size: 14.5px; overflow-wrap: anywhere; }
+.pkg .ver { font: 12px var(--mono); color: var(--faint); }
+.pkg .desc { color: var(--muted); font-size: 13px; margin-top: 2px; }
+.pkg .src { font: 12px var(--mono); color: var(--faint); margin-top: 4px; overflow-wrap: anywhere; }
+.pkg .res { margin-top: 6px; font-size: 12.5px; color: var(--muted); display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.pkg .res button { color: var(--accent-text); font-size: 12.5px; }
+.pkg .res button:hover { text-decoration: underline; }
+.pkg .files { grid-column: 2 / -1; margin-top: 6px; padding: 8px 12px; border-radius: 8px; background: var(--bg); font-size: 12.5px; }
+.pkg .files div + div { margin-top: 6px; }
+.pkg .files .t { color: var(--faint); font-size: 11.5px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; }
+.pkg .files code { display: block; overflow-wrap: anywhere; }
+.pkg .files code.off { color: var(--faint); text-decoration: line-through; }
+.pkg .side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.pkg .acts { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.tag { font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--user); color: var(--muted); white-space: nowrap; font-weight: 550; line-height: 18px; }
+.tag.project { background: var(--ok-soft); color: var(--ok); }
+.tag.warn { background: var(--warn-soft); color: var(--warn); }
+.tag.bad { background: var(--danger-soft); color: var(--danger); }
+.tag.new { background: var(--accent-soft); color: var(--accent-text); }
+.empty { padding: 40px 20px; text-align: center; color: var(--faint); }
+
+.switch { position: relative; width: 38px; height: 22px; border-radius: 999px; background: var(--line-strong); transition: background .15s; flex: none; }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .15s; }
+.switch[aria-checked="true"] { background: var(--ok); }
+.switch[aria-checked="true"]::after { transform: translateX(16px); }
+.switch:disabled { opacity: .45; cursor: default; }
+.switch-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); }
+
+.jobs { margin-bottom: 14px; }
+.jobs .head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.job { border: 1px solid var(--line); border-radius: 8px; margin-top: 6px; overflow: hidden; }
+.job > button { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 12px; text-align: left; }
+.job > button:hover { background: var(--bg); }
+.job .st { width: 16px; display: grid; place-items: center; flex: none; font-weight: 700; }
+.job.done .st { color: var(--ok); } .job.error .st { color: var(--danger); } .job.queued .st { color: var(--faint); }
+.job .what { font-weight: 550; white-space: nowrap; }
+.job .src { font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+.job pre { margin: 0; padding: 10px 12px; max-height: 260px; overflow: auto; background: var(--user); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; border-top: 1px solid var(--line); }
+.job .err { padding: 6px 12px; color: var(--danger); font-size: 12.5px; border-top: 1px solid var(--line); }
+
+.results .pkg { grid-template-columns: minmax(0, 1fr) auto; }
+.results .links { display: flex; gap: 12px; font-size: 12.5px; margin-top: 4px; flex-wrap: wrap; }
+
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: .2s; pointer-events: none; max-width: calc(100vw - 32px); z-index: 30; }
+.toast.show { opacity: 1; transform: translateX(-50%); }
+
+@media (max-width: 760px) {
+  header { height: auto; flex-wrap: wrap; padding: 10px 16px; gap: 10px; }
+  .wrap { padding: 16px 16px 80px; }
+  .bulk { top: 8px; }
+  .pkg { grid-template-columns: 22px minmax(0, 1fr); }
+  .pkg .side { grid-column: 2; flex-direction: row-reverse; justify-content: space-between; align-items: center; width: 100%; margin-top: 8px; }
+  .results .pkg { grid-template-columns: minmax(0, 1fr); }
+  .results .pkg .side { grid-column: 1; }
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><span class="logo">π</span><span class="brand-name" id="brandName">插件</span></div>
+  <nav id="pi-web-nav"></nav>
+  <div class="spacer"></div>
+  <div class="pending" id="pending" hidden><span class="dot"></span><span id="pendingText"></span><button class="btn small primary" id="reloadBtn"></button></div>
+</header>
+<div class="wrap">
+  <h1 id="title"></h1>
+  <p class="lead" id="lead"></p>
+  <div class="tabs">
+    <div class="seg" id="tabs"></div>
+  </div>
+  <section id="jobs" class="card jobs" hidden></section>
+  <section id="installed"></section>
+  <section id="discover" hidden></section>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+const TOKEN = window.piWeb ? window.piWeb.token : "";
+const LANG = window.piWeb && window.piWeb.lang === "en" ? "en" : "zh";
+document.documentElement.lang = LANG === "zh" ? "zh-CN" : "en";
+
+const L = {
+  zh: {
+    brand: "插件", title: "插件管理", lead: "安装、卸载、启用、停用和更新 pi 插件。停用只是不加载，插件仍保留在磁盘上，随时可以再启用。",
+    installed: "已安装", discover: "发现插件",
+    installTitle: "安装插件", sourcePh: "npm:pi-foo、git:github.com/user/repo、https://github.com/user/repo 或本地路径",
+    install: "安装", scopeUser: "全局", scopeProject: "当前项目", scopeTip: { user: "所有项目都会加载（~/.pi/agent/settings.json）", project: "只在当前项目加载（.pi/settings.json，可随 git 共享）" },
+    untrusted: "当前项目未被信任，只能管理全局插件", hint: "可以直接粘贴包名（自动当作 npm）或 github.com/user/repo。",
+    filter: "筛选名称、来源、描述…", all: "全部", on: "已启用", off: "已停用", upd: "可更新",
+    checkUpdates: "检查更新", checking: "检查中…", updateAll: "全部更新", checked: t => `上次检查：${t}`, noUpdates: "所有插件都是最新的", updatesFound: n => `${n} 个插件可以更新`,
+    selected: n => `已选 ${n} 个`, enable: "启用", disable: "停用", update: "更新", remove: "卸载", clearSel: "取消选择", openDir: "打开目录", reinstall: "重新安装",
+    enabled: "已启用", disabled: "已停用", missing: "未安装", updateAvail: "有更新", filtered: "部分资源", filteredTip: "用 pi config 只加载了其中一部分资源", self: "插件管理器",
+    selfTip: "插件管理器不能在这里停用或卸载，请在终端用 pi remove", local: "本地", npm: "npm", git: "git",
+    resTypes: { extensions: "扩展", skills: "技能", prompts: "提示模板", themes: "主题" }, noRes: "没有可加载的资源", showFiles: "查看文件", hideFiles: "收起",
+    empty: "还没有安装任何插件，在上面填写来源安装，或去「发现插件」看看。", noMatch: "没有匹配的插件",
+    confirmRemove: names => `卸载 ${names}？\n\n会删除下载的文件，并从设置中移除。本地路径的插件只会从设置中移除，不会删除你的文件。`,
+    confirmRemoveSelf: "选中的插件里包含插件管理器本身，它会被跳过。",
+    pendingText: "改动需要重新加载 pi 才会生效", reloadNow: "重新加载", reloading: "正在重新加载 pi…", reloaded: "pi 已重新加载，改动已生效",
+    reloadHint: "也可以在 pi 里输入 /reload",
+    jobsTitle: "操作记录", clearJobs: "清除已完成", jobAct: { install: "安装", remove: "卸载", update: "更新", updateAll: "全部更新" },
+    jobState: { queued: "排队中", running: "进行中", done: "完成", error: "失败" },
+    queued: what => `已开始${what}`, done: what => `${what}完成`, failed: what => `${what}失败`,
+    nowEnabled: n => `已启用 ${n}`, nowDisabled: n => `已停用 ${n}`,
+    searchPh: "搜索 npm 上的 pi 插件（带 pi-package 关键字）", search: "搜索", searching: "搜索中…", noResults: "没有找到插件",
+    discoverLead: "来自 npm 上标记了 pi-package 的包，和 pi.dev/packages 的来源相同。安装前请确认你信任这个插件：插件可以执行任意代码。",
+    isInstalled: "已安装", installTo: "安装到", by: p => `作者 ${p}`, updatedAt: d => `更新于 ${d}`, repo: "仓库", home: "主页",
+    offline: "连接不上 pi，请确认 pi 还在运行", switching: "pi 正在切换会话…",
+  },
+  en: {
+    brand: "Packages", title: "Packages", lead: "Install, uninstall, enable, disable and update pi packages. Disabled packages stay on disk and can be turned back on at any time.",
+    installed: "Installed", discover: "Discover",
+    installTitle: "Install a package", sourcePh: "npm:pi-foo, git:github.com/user/repo, https://github.com/user/repo or a local path",
+    install: "Install", scopeUser: "Global", scopeProject: "This project", scopeTip: { user: "Loaded in every project (~/.pi/agent/settings.json)", project: "Loaded only in this project (.pi/settings.json, shareable through git)" },
+    untrusted: "This project is not trusted; only global packages can be managed", hint: "A bare package name is treated as npm; github.com/user/repo as git.",
+    filter: "Filter by name, source, description…", all: "All", on: "Enabled", off: "Disabled", upd: "Updates",
+    checkUpdates: "Check for updates", checking: "Checking…", updateAll: "Update all", checked: t => `Last checked ${t}`, noUpdates: "Everything is up to date", updatesFound: n => `${n} package${n === 1 ? "" : "s"} can be updated`,
+    selected: n => `${n} selected`, enable: "Enable", disable: "Disable", update: "Update", remove: "Uninstall", clearSel: "Clear", openDir: "Show files", reinstall: "Reinstall",
+    enabled: "enabled", disabled: "disabled", missing: "not installed", updateAvail: "update", filtered: "partial", filteredTip: "Only some resources load, set with pi config", self: "this manager",
+    selfTip: "The package manager cannot disable or remove itself here; use pi remove in a terminal", local: "local", npm: "npm", git: "git",
+    resTypes: { extensions: "extensions", skills: "skills", prompts: "prompts", themes: "themes" }, noRes: "No loadable resources", showFiles: "Show files", hideFiles: "Hide",
+    empty: "No packages yet. Install one above, or browse Discover.", noMatch: "No packages match",
+    confirmRemove: names => `Uninstall ${names}?\n\nDownloaded files are deleted and the settings entry is removed. Local-path packages are only removed from settings; your files stay.`,
+    confirmRemoveSelf: "The package manager itself is selected and will be skipped.",
+    pendingText: "Reload pi to apply changes", reloadNow: "Reload", reloading: "Reloading pi…", reloaded: "pi reloaded; changes are live",
+    reloadHint: "You can also type /reload in pi",
+    jobsTitle: "Activity", clearJobs: "Clear finished", jobAct: { install: "Install", remove: "Uninstall", update: "Update", updateAll: "Update all" },
+    jobState: { queued: "queued", running: "running", done: "done", error: "failed" },
+    queued: what => `${what} started`, done: what => `${what} finished`, failed: what => `${what} failed`,
+    nowEnabled: n => `Enabled ${n}`, nowDisabled: n => `Disabled ${n}`,
+    searchPh: "Search npm for pi packages (keyword pi-package)", search: "Search", searching: "Searching…", noResults: "No packages found",
+    discoverLead: "npm packages tagged pi-package, the same source as pi.dev/packages. Only install packages you trust: they can run any code.",
+    isInstalled: "Installed", installTo: "Install to", by: p => `by ${p}`, updatedAt: d => `updated ${d}`, repo: "repo", home: "home",
+    offline: "Cannot reach pi; is it still running?", switching: "pi is switching sessions…",
+  },
+}[LANG];
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const key = p => p.scope + "\n" + p.source;
+const fmtDate = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleDateString(LANG === "zh" ? "zh-CN" : "en", { year: "numeric", month: "short", day: "numeric" }); };
+const fmtTime = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString(LANG === "zh" ? "zh-CN" : "en", { hour: "2-digit", minute: "2-digit" }); };
+let toastTimer;
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2800); }
+
+async function api(path, body, signal) {
+  let res;
+  const headers = { "x-token": TOKEN, "x-lang": LANG };
+  try {
+    res = await fetch("/api/manage" + path, body === undefined ? { headers, signal } : { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(body), signal });
+  } catch (e) { if (e.name === "AbortError") throw e; throw new Error(L.offline); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || `HTTP ${res.status}`), { status: res.status });
+  return data;
+}
+
+const params = new URLSearchParams(location.search);
+const S = {
+  tab: params.get("tab") === "discover" ? "discover" : "installed",
+  packages: [], trusted: false, cwd: "", loaded: false, error: "",
+  updates: null, checking: false,
+  filter: "", view: "all", selected: new Set(), open: new Set(),
+  status: { busy: false, pendingReload: false, canReload: false, jobs: [] },
+  openJobs: new Set(), seenJobs: new Map(),
+  reloading: false,
+  search: { q: params.get("q") || "", results: null, loading: false, error: "", scope: "user" },
+  installScope: "user",
+};
+
+// ---- Data ----
+async function loadPackages() {
+  try {
+    const d = await api("/packages");
+    Object.assign(S, { packages: d.packages, trusted: d.trusted, cwd: d.cwd, loaded: true, error: "" });
+    if (d.updates) S.updates = d.updates;
+    S.status.pendingReload = d.pendingReload;
+    const keys = new Set(d.packages.map(key));
+    for (const k of [...S.selected]) if (!keys.has(k)) S.selected.delete(k);
+    if (!S.trusted) { S.installScope = "user"; S.search.scope = "user"; }
+  } catch (e) { S.error = e.message; S.loaded = true; }
+  render();
+}
+
+let pollTimer;
+async function poll() {
+  clearTimeout(pollTimer);
+  try {
+    const st = await api("/status");
+    let finished = false;
+    for (const j of st.jobs) {
+      const before = S.seenJobs.get(j.id);
+      if (before && before !== j.state && (j.state === "done" || j.state === "error")) {
+        finished = true;
+        const what = L.jobAct[j.action];
+        toast(j.state === "done" ? L.done(what) : L.failed(what) + (j.error ? (LANG === "zh" ? "：" : ": ") + j.error : ""));
+        if (j.state === "error") S.openJobs.add(j.id);
+      }
+      S.seenJobs.set(j.id, j.state);
+    }
+    const wasReloading = S.reloading;
+    S.status = st;
+    if (S.reloading && !st.pendingReload) { S.reloading = false; toast(L.reloaded); finished = true; }
+    if (finished || wasReloading !== S.reloading) await loadPackages(); else render();
+  } catch {
+    // The server blinks during a reload; keep trying.
+  }
+  pollTimer = setTimeout(poll, S.status.busy || S.reloading ? 800 : 4000);
+}
+
+async function act(fn) {
+  try { const r = await fn(); await poll(); return r; } catch (e) { toast(e.message); await loadPackages(); }
+}
+
+const pkgBy = k => S.packages.find(p => key(p) === k);
+
+async function setEnabled(list, enabled) {
+  let done = 0;
+  for (const p of list) {
+    if (p.self && !enabled) continue;
+    try { await api(enabled ? "/enable" : "/disable", { scope: p.scope, source: p.source }); done++; } catch (e) { toast(e.message); }
+  }
+  if (done) toast(enabled ? L.nowEnabled(list.length === 1 ? list[0].name : done) : L.nowDisabled(list.length === 1 ? list[0].name : done));
+  await loadPackages(); poll();
+}
+
+async function startJob(path, body) {
+  const r = await act(() => api(path, body));
+  if (r && r.job) { S.openJobs.add(r.job.id); S.seenJobs.set(r.job.id, r.job.state); toast(L.queued(L.jobAct[r.job.action])); }
+  render();
+  return r;
+}
+
+async function removeList(list) {
+  const skip = list.filter(p => p.self), go = list.filter(p => !p.self);
+  if (!go.length) { toast(L.selfTip); return; }
+  if (!confirm(L.confirmRemove(go.map(p => p.name).join(LANG === "zh" ? "、" : ", ")) + (skip.length ? "\n\n" + L.confirmRemoveSelf : ""))) return;
+  for (const p of go) await startJob("/remove", { scope: p.scope, source: p.source });
+  for (const p of go) S.selected.delete(key(p));
+}
+
+async function updateList(list) {
+  for (const p of list.filter(p => p.kind !== "local")) await startJob("/update", { scope: p.scope, source: p.source });
+}
+
+async function checkUpdates() {
+  S.checking = true; render();
+  try {
+    S.updates = await api("/check-updates", {});
+    toast(S.updates.keys.length ? L.updatesFound(S.updates.keys.length) : L.noUpdates);
+  } catch (e) { toast(e.message); }
+  S.checking = false; render();
+}
+
+async function reloadPi() {
+  try { await api("/reload", {}); S.reloading = true; render(); poll(); } catch (e) { toast(e.message + " · " + L.reloadHint); }
+}
+
+async function runSearch() {
+  const s = S.search;
+  s.loading = true; s.error = ""; render();
+  try { s.results = (await api("/search?q=" + encodeURIComponent(s.q))).results; } catch (e) { s.error = e.message; }
+  s.loading = false; render();
+  const u = new URL(location.href); u.searchParams.set("tab", "discover"); if (s.q) u.searchParams.set("q", s.q); else u.searchParams.delete("q");
+  history.replaceState(null, "", u.pathname + u.search);
+}
+
+// ---- Render ----
+const hasUpdate = p => !!S.updates && S.updates.keys.includes(key(p));
+const npmName = source => source.replace(/^npm:/, "").replace(/(.)@[^/]*$/, "$1");
+function visible() {
+  const q = S.filter.trim().toLowerCase();
+  return S.packages.filter(p => {
+    if (S.view === "on" && !(p.enabled && p.installed)) return false;
+    if (S.view === "off" && p.enabled && p.installed) return false;
+    if (S.view === "upd" && !hasUpdate(p)) return false;
+    return !q || [p.name, p.source, p.description].some(v => String(v || "").toLowerCase().includes(q));
+  });
+}
+
+function render() {
+  $("brandName").textContent = L.brand;
+  $("title").textContent = L.title;
+  $("lead").textContent = L.lead;
+  document.title = "pi " + L.brand;
+  const tabs = [["installed", L.installed, S.packages.length], ["discover", L.discover]];
+  $("tabs").innerHTML = tabs.map(([id, label, n]) => `<button data-tab="${id}" class="${S.tab === id ? "on" : ""}">${esc(label)}${n ? `<span class="n">${n}</span>` : ""}</button>`).join("");
+  const pend = S.status.pendingReload || S.reloading;
+  $("pending").hidden = !pend;
+  $("pendingText").textContent = S.reloading ? L.reloading : L.pendingText;
+  $("reloadBtn").textContent = L.reloadNow;
+  $("reloadBtn").disabled = S.reloading || S.status.busy;
+  $("reloadBtn").hidden = S.reloading;
+  $("reloadBtn").title = L.reloadHint;
+  renderJobs();
+  $("installed").hidden = S.tab !== "installed";
+  $("discover").hidden = S.tab !== "discover";
+  if (S.tab === "installed") renderInstalled(); else renderDiscover();
+}
+
+function renderJobs() {
+  const jobs = S.status.jobs || [];
+  const el = $("jobs");
+  el.hidden = !jobs.length;
+  if (!jobs.length) return;
+  const finished = jobs.some(j => j.state === "done" || j.state === "error");
+  el.innerHTML = `<div class="head"><h2>${esc(L.jobsTitle)}</h2><div class="spacer"></div>${finished ? `<button class="btn small ghost" data-act="clear-jobs">${esc(L.clearJobs)}</button>` : ""}</div>` +
+    [...jobs].reverse().map(j => {
+      const icon = j.state === "running" ? '<span class="spin"></span>' : j.state === "done" ? "✓" : j.state === "error" ? "!" : "…";
+      const open = S.openJobs.has(j.id) || j.state === "running";
+      return `<div class="job ${j.state}">
+        <button data-job="${j.id}"><span class="st">${icon}</span><span class="what">${esc(L.jobAct[j.action])}</span><span class="src">${esc(j.source || "")}</span><span class="faint">${esc(L.jobState[j.state])} · ${esc(fmtTime(j.started))}</span></button>
+        ${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}
+        ${open && j.log.length ? `<pre data-log="${j.id}">${esc(j.log.join("\n"))}</pre>` : ""}
+      </div>`;
+    }).join("");
+  for (const pre of el.querySelectorAll("pre")) pre.scrollTop = pre.scrollHeight;
+}
+
+function scopeSelect(id, value) {
+  return `<select id="${id}" title="${esc(L.scopeTip[value])}">
+    <option value="user"${value === "user" ? " selected" : ""}>${esc(L.scopeUser)}</option>
+    <option value="project"${value === "project" ? " selected" : ""}${S.trusted ? "" : " disabled"}>${esc(L.scopeProject)}</option>
+  </select>`;
+}
+
+function renderInstalled() {
+  const el = $("installed");
+  // Keep what is being typed across re-renders.
+  const typed = $("src") ? $("src").value : "";
+  const focus = document.activeElement && document.activeElement.id;
+  const caret = document.activeElement && document.activeElement.selectionStart;
+  const list = visible();
+  const counts = { all: S.packages.length, on: S.packages.filter(p => p.enabled && p.installed).length, upd: S.updates ? S.updates.keys.length : 0 };
+  counts.off = counts.all - counts.on;
+  const sel = S.packages.filter(p => S.selected.has(key(p)));
+  const busy = S.status.busy;
+  el.innerHTML = `
+    <div class="card install">
+      <h2 style="margin-bottom:10px">${esc(L.installTitle)}</h2>
+      <form class="row" id="installForm">
+        <input class="text mono" id="src" placeholder="${esc(L.sourcePh)}" autocomplete="off" spellcheck="false">
+        ${scopeSelect("installScope", S.installScope)}
+        <button class="btn primary" type="submit">${esc(L.install)}</button>
+      </form>
+      <div class="faint hint">${esc(L.hint)}${S.trusted ? "" : " " + esc(L.untrusted)}${S.cwd ? ` · <span class="mono">${esc(S.cwd)}</span>` : ""}</div>
+    </div>
+    ${S.error ? `<div class="error">${esc(S.error)}</div>` : ""}
+    <div class="toolbar">
+      <input class="text" id="filter" placeholder="${esc(L.filter)}" value="${esc(S.filter)}">
+      <div class="seg" id="views">${[["all", L.all], ["on", L.on], ["off", L.off], ...(S.updates ? [["upd", L.upd]] : [])].map(([v, label]) => `<button data-view="${v}" class="${S.view === v ? "on" : ""}">${esc(label)}<span class="n">${counts[v]}</span></button>`).join("")}</div>
+      <button class="btn" data-act="check" ${S.checking ? "disabled" : ""}>${S.checking ? `<span class="spin"></span>${esc(L.checking)}` : esc(L.checkUpdates)}</button>
+      ${S.updates && S.updates.keys.length ? `<button class="btn primary" data-act="update-all">${esc(L.updateAll)}</button>` : ""}
+    </div>
+    ${S.updates ? `<div class="faint" style="margin:-4px 0 10px">${esc(L.checked(fmtTime(S.updates.checked)))} · ${esc(S.updates.keys.length ? L.updatesFound(S.updates.keys.length) : L.noUpdates)}</div>` : ""}
+    ${sel.length ? `<div class="bulk"><strong>${esc(L.selected(sel.length))}</strong>
+      <button class="btn small" data-bulk="enable">${esc(L.enable)}</button>
+      <button class="btn small" data-bulk="disable">${esc(L.disable)}</button>
+      <button class="btn small" data-bulk="update" ${sel.some(p => p.kind !== "local") ? "" : "disabled"}>${esc(L.update)}</button>
+      <button class="btn small danger" data-bulk="remove">${esc(L.remove)}</button>
+      <button class="btn small ghost" data-bulk="clear">${esc(L.clearSel)}</button></div>` : ""}
+    <div class="list">${!S.loaded ? `<div class="empty"><span class="spin"></span></div>` : !S.packages.length ? `<div class="empty">${esc(L.empty)}</div>` : !list.length ? `<div class="empty">${esc(L.noMatch)}</div>` : list.map(pkgRow).join("")}</div>`;
+  $("src").value = typed;
+  if (focus && $(focus)) { $(focus).focus(); try { if (caret != null) $(focus).setSelectionRange(caret, caret); } catch {} }
+}
+
+function pkgRow(p) {
+  const k = key(p), on = p.enabled && p.installed, upd = hasUpdate(p), busy = S.status.busy;
+  const res = Object.entries(p.resources).filter(([, r]) => r.length);
+  const tags = [
+    `<span class="tag ${p.scope === "project" ? "project" : ""}" title="${esc(L.scopeTip[p.scope])}">${esc(p.scope === "project" ? L.scopeProject : L.scopeUser)}</span>`,
+    `<span class="tag">${esc(L[p.kind])}</span>`,
+    !p.installed ? `<span class="tag bad">${esc(L.missing)}</span>` : "",
+    p.filtered ? `<span class="tag warn" title="${esc(L.filteredTip)}">${esc(L.filtered)}</span>` : "",
+    upd ? `<span class="tag new">${esc(L.updateAvail)}</span>` : "",
+    p.self ? `<span class="tag" title="${esc(L.selfTip)}">${esc(L.self)}</span>` : "",
+  ].join("");
+  const summary = res.length
+    ? res.map(([t, r]) => `${r.length} ${esc(L.resTypes[t])}`).join(" · ") + ` <button data-files="${esc(k)}">${esc(S.open.has(k) ? L.hideFiles : L.showFiles)}</button>`
+    : p.installed ? esc(L.noRes) : "";
+  const files = S.open.has(k) && res.length ? `<div class="files">${res.map(([t, r]) => `<div><div class="t">${esc(L.resTypes[t])}</div>${r.map(f => `<code class="${f.enabled ? "" : "off"}">${esc(f.path)}</code>`).join("")}</div>`).join("")}</div>` : "";
+  const homepage = p.homepage ? ` · <a href="${esc(p.homepage)}" target="_blank" rel="noopener noreferrer">${esc(L.home)}</a>` : "";
+  return `<div class="pkg ${on ? "" : "off"}" data-key="${esc(k)}">
+    <input type="checkbox" data-sel="${esc(k)}" ${S.selected.has(k) ? "checked" : ""}>
+    <div>
+      <div class="head"><span class="name">${esc(p.name)}</span>${p.version ? `<span class="ver">${esc(p.version)}</span>` : ""}${tags}</div>
+      ${p.description ? `<div class="desc">${esc(p.description)}</div>` : ""}
+      <div class="src">${esc(p.source)}${homepage}</div>
+      <div class="res">${summary}</div>
+    </div>
+    <div class="side">
+      <label class="switch-row">${esc(p.enabled ? L.enabled : L.disabled)}<button class="switch" role="switch" aria-checked="${p.enabled}" data-toggle="${esc(k)}" ${p.self && p.enabled ? `disabled title="${esc(L.selfTip)}"` : ""}></button></label>
+      <div class="acts">
+        ${!p.installed ? `<button class="btn small" data-reinstall="${esc(k)}">${esc(L.reinstall)}</button>` : ""}
+        ${p.kind !== "local" && p.installed ? `<button class="btn small ${upd ? "primary" : ""}" data-update="${esc(k)}">${esc(L.update)}</button>` : ""}
+        ${p.path ? `<button class="btn small ghost" data-open="${esc(k)}">${esc(L.openDir)}</button>` : ""}
+        ${p.self ? "" : `<button class="btn small danger" data-remove="${esc(k)}">${esc(L.remove)}</button>`}
+      </div>
+    </div>
+    ${files}
+  </div>`;
+}
+
+function renderDiscover() {
+  const el = $("discover"), s = S.search;
+  const focus = document.activeElement && document.activeElement.id === "q";
+  const installed = name => S.packages.some(p => p.kind === "npm" && (p.name === name || npmName(p.source) === name));
+  el.innerHTML = `
+    <div class="card">
+      <form class="row" id="searchForm">
+        <input class="text" id="q" style="flex:1;min-width:200px" placeholder="${esc(L.searchPh)}" value="${esc(s.q)}" autocomplete="off">
+        <span class="faint">${esc(L.installTo)}</span>${scopeSelect("searchScope", s.scope)}
+        <button class="btn primary" type="submit" ${s.loading ? "disabled" : ""}>${s.loading ? `<span class="spin"></span>${esc(L.searching)}` : esc(L.search)}</button>
+      </form>
+      <div class="faint" style="margin-top:8px">${esc(L.discoverLead)}</div>
+    </div>
+    ${s.error ? `<div class="error">${esc(s.error)}</div>` : ""}
+    ${s.results ? `<div class="list results">${s.results.length ? s.results.map(r => {
+      const have = installed(r.name);
+      const meta = [r.publisher ? L.by(r.publisher) : "", r.date ? L.updatedAt(fmtDate(r.date)) : ""].filter(Boolean).join(" · ");
+      return `<div class="pkg">
+        <div>
+          <div class="head"><span class="name">${esc(r.name)}</span><span class="ver">${esc(r.version)}</span>${have ? `<span class="tag project">${esc(L.isInstalled)}</span>` : ""}</div>
+          ${r.description ? `<div class="desc">${esc(r.description)}</div>` : ""}
+          <div class="links"><span class="faint">${esc(meta)}</span>
+            ${r.npm ? `<a href="${esc(r.npm)}" target="_blank" rel="noopener noreferrer">npm</a>` : ""}
+            ${r.repository ? `<a href="${esc(r.repository)}" target="_blank" rel="noopener noreferrer">${esc(L.repo)}</a>` : ""}
+            ${r.homepage && r.homepage !== r.repository ? `<a href="${esc(r.homepage)}" target="_blank" rel="noopener noreferrer">${esc(L.home)}</a>` : ""}
+          </div>
+        </div>
+        <div class="side">${have ? "" : `<button class="btn small primary" data-get="${esc(r.name)}">${esc(L.install)}</button>`}</div>
+      </div>`;
+    }).join("") : `<div class="empty">${esc(L.noResults)}</div>`}</div>` : ""}`;
+  if (focus) { const q = $("q"); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+}
+
+// ---- Events (delegated, so re-renders keep working) ----
+document.addEventListener("click", e => {
+  const t = e.target.closest("button, a");
+  if (!t) return;
+  const d = t.dataset;
+  if (d.tab) { S.tab = d.tab; const u = new URL(location.href); u.searchParams.set("tab", d.tab); history.replaceState(null, "", u.pathname + u.search); render(); if (d.tab === "discover" && !S.search.results) runSearch(); return; }
+  if (d.view) { S.view = d.view; render(); return; }
+  if (d.files) { S.open.has(d.files) ? S.open.delete(d.files) : S.open.add(d.files); render(); return; }
+  if (d.job) { const id = Number(d.job); S.openJobs.has(id) ? S.openJobs.delete(id) : S.openJobs.add(id); render(); return; }
+  if (d.act === "clear-jobs") { act(() => api("/jobs/clear", {})); return; }
+  if (d.act === "check") { checkUpdates(); return; }
+  if (d.act === "update-all") { startJob("/update", { all: true }); return; }
+  if (d.toggle) { const p = pkgBy(d.toggle); if (p) setEnabled([p], !p.enabled); return; }
+  if (d.update) { const p = pkgBy(d.update); if (p) updateList([p]); return; }
+  if (d.remove) { const p = pkgBy(d.remove); if (p) removeList([p]); return; }
+  if (d.reinstall) { const p = pkgBy(d.reinstall); if (p) startJob("/install", { scope: p.scope, source: p.source }); return; }
+  if (d.open) { const p = pkgBy(d.open); if (p) act(() => api("/open", { scope: p.scope, source: p.source })); return; }
+  if (d.get) { startJob("/install", { scope: S.search.scope, source: "npm:" + d.get }); return; }
+  if (d.bulk) {
+    const sel = S.packages.filter(p => S.selected.has(key(p)));
+    if (d.bulk === "clear") { S.selected.clear(); render(); }
+    else if (d.bulk === "enable") setEnabled(sel, true);
+    else if (d.bulk === "disable") setEnabled(sel, false);
+    else if (d.bulk === "update") updateList(sel);
+    else if (d.bulk === "remove") removeList(sel);
+  }
+});
+document.addEventListener("change", e => {
+  const t = e.target;
+  if (t.dataset.sel) { t.checked ? S.selected.add(t.dataset.sel) : S.selected.delete(t.dataset.sel); render(); }
+  if (t.id === "installScope") S.installScope = t.value;
+  if (t.id === "searchScope") S.search.scope = t.value;
+});
+document.addEventListener("input", e => {
+  if (e.target.id === "filter") { S.filter = e.target.value; render(); }
+  if (e.target.id === "q") S.search.q = e.target.value;
+});
+document.addEventListener("submit", async e => {
+  e.preventDefault();
+  if (e.target.id === "installForm") {
+    const src = $("src").value.trim();
+    if (!src) { toast(L.sourcePh); return; }
+    const r = await startJob("/install", { scope: S.installScope, source: src });
+    if (r && r.job && $("src")) $("src").value = "";
+  }
+  if (e.target.id === "searchForm") runSearch();
+});
+$("reloadBtn").addEventListener("click", reloadPi);
+
+render();
+loadPackages().then(poll);
+if (S.tab === "discover") runSearch();
+</script>
+</body>
+</html>
