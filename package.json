@@ -1,6 +1,6 @@
 {
   "name": "pi-manage",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Manage pi packages from a web page: one-click install, uninstall, enable, disable and update",
   "type": "module",
   "license": "MIT",
