@@ -337,15 +337,16 @@ async function removeList(list) {
 }
 
 async function updateList(list) {
-  for (const p of list.filter(p => p.kind !== "local")) await startJob("/update", { scope: p.scope, source: p.source });
+  for (const p of list.filter(hasUpdate)) await startJob("/update", { scope: p.scope, source: p.source });
 }
 
-async function checkUpdates() {
+async function checkUpdates(quiet) {
   S.checking = true; render();
   try {
     S.updates = await api("/check-updates", {});
-    toast(S.updates.keys.length ? L.updatesFound(S.updates.keys.length) : L.noUpdates);
-  } catch (e) { toast(e.message); }
+    if (!quiet) toast(S.updates.keys.length ? L.updatesFound(S.updates.keys.length) : L.noUpdates);
+    if (S.view === "upd" && !S.updates.keys.length) S.view = "all";
+  } catch (e) { if (!quiet) toast(e.message); }
   S.checking = false; render();
 }
 
@@ -445,7 +446,7 @@ function renderInstalled() {
     ${S.error ? `<div class="error">${esc(S.error)}</div>` : ""}
     <div class="toolbar">
       <input class="text" id="filter" placeholder="${esc(L.filter)}" value="${esc(S.filter)}">
-      <div class="seg" id="views">${[["all", L.all], ["on", L.on], ["off", L.off], ...(S.updates ? [["upd", L.upd]] : [])].map(([v, label]) => `<button data-view="${v}" class="${S.view === v ? "on" : ""}">${esc(label)}<span class="n">${counts[v]}</span></button>`).join("")}</div>
+      <div class="seg" id="views">${[["all", L.all], ["on", L.on], ["off", L.off], ...(counts.upd ? [["upd", L.upd]] : [])].map(([v, label]) => `<button data-view="${v}" class="${S.view === v ? "on" : ""}">${esc(label)}<span class="n">${counts[v]}</span></button>`).join("")}</div>
       <button class="btn" data-act="check" ${S.checking ? "disabled" : ""}>${S.checking ? `<span class="spin"></span>${esc(L.checking)}` : esc(L.checkUpdates)}</button>
       ${S.updates && S.updates.keys.length ? `<button class="btn primary" data-act="update-all">${esc(L.updateAll)}</button>` : ""}
     </div>
@@ -453,7 +454,7 @@ function renderInstalled() {
     ${sel.length ? `<div class="bulk"><strong>${esc(L.selected(sel.length))}</strong>
       <button class="btn small" data-bulk="enable">${esc(L.enable)}</button>
       <button class="btn small" data-bulk="disable">${esc(L.disable)}</button>
-      <button class="btn small" data-bulk="update" ${sel.some(p => p.kind !== "local") ? "" : "disabled"}>${esc(L.update)}</button>
+      ${sel.some(hasUpdate) ? `<button class="btn small primary" data-bulk="update">${esc(L.update)}</button>` : ""}
       <button class="btn small danger" data-bulk="remove">${esc(L.remove)}</button>
       <button class="btn small ghost" data-bulk="clear">${esc(L.clearSel)}</button></div>` : ""}
     <div class="list">${!S.loaded ? `<div class="empty"><span class="spin"></span></div>` : !S.packages.length ? `<div class="empty">${esc(L.empty)}</div>` : !list.length ? `<div class="empty">${esc(L.noMatch)}</div>` : list.map(pkgRow).join("")}</div>`;
@@ -489,7 +490,7 @@ function pkgRow(p) {
       <label class="switch-row">${esc(p.enabled ? L.enabled : L.disabled)}<button class="switch" role="switch" aria-checked="${p.enabled}" data-toggle="${esc(k)}" ${p.self && p.enabled ? `disabled title="${esc(L.selfTip)}"` : ""}></button></label>
       <div class="acts">
         ${!p.installed ? `<button class="btn small" data-reinstall="${esc(k)}">${esc(L.reinstall)}</button>` : ""}
-        ${p.kind !== "local" && p.installed ? `<button class="btn small ${upd ? "primary" : ""}" data-update="${esc(k)}">${esc(L.update)}</button>` : ""}
+        ${upd && p.installed ? `<button class="btn small primary" data-update="${esc(k)}">${esc(L.update)}</button>` : ""}
         ${p.path ? `<button class="btn small ghost" data-open="${esc(k)}">${esc(L.openDir)}</button>` : ""}
         ${p.self ? "" : `<button class="btn small danger" data-remove="${esc(k)}">${esc(L.remove)}</button>`}
       </div>
@@ -581,7 +582,11 @@ document.addEventListener("submit", async e => {
 $("reloadBtn").addEventListener("click", reloadPi);
 
 render();
-loadPackages().then(poll);
+loadPackages().then(() => {
+  poll();
+  // Update buttons only show for packages with a newer version, so find out right away (the server keeps the result for other tabs).
+  if (!S.updates || Date.now() - new Date(S.updates.checked) > 10 * 60 * 1000) checkUpdates(true);
+});
 if (S.tab === "discover") runSearch();
 </script>
 </body>
