@@ -2,6 +2,7 @@ import { DefaultPackageManager, type PackageSource, SettingsManager } from "@ear
 
 export type { PackageSource };
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
@@ -192,15 +193,8 @@ export class PackageService {
   private stashKey(scope: Scope, source: string): string {
     return scope === "user" ? `user\n${source}` : `project\n${resolve(this.opts.context().cwd)}\n${source}`;
   }
-  private async readStash(): Promise<Record<string, PackageSource>> {
-    try { return JSON.parse(await readFile(this.stashFile(), "utf8")); } catch { return {}; }
-  }
-  private async writeStash(stash: Record<string, PackageSource>): Promise<void> {
-    const file = this.stashFile(), tmp = `${file}.${process.pid}.tmp`;
-    await mkdir(dirname(file), { recursive: true });
-    await writeFile(tmp, JSON.stringify(stash, null, 2));
-    await rename(tmp, file);
-  }
+  private readStash(): Promise<Record<string, PackageSource>> { return readJson(this.stashFile(), {}); }
+  private writeStash(stash: Record<string, PackageSource>): Promise<void> { return writeJson(this.stashFile(), stash); }
 
   /**
    * Disable replaces the entry with one that loads no resources and keeps the old entry aside
@@ -243,14 +237,75 @@ export class PackageService {
    * `pi install` can fetch it from again. Local sources in settings are relative to the settings file, so
    * those reinstall from the resolved path.
    */
-  undoInfo(scope: Scope, source: string): { entry: PackageSource; install: string } | undefined {
+  undoInfo(scope: Scope, source: string): { entry: PackageSource; install: string; name: string } | undefined {
     const { settings, pm } = this.managers();
     const entry = (scope === "project" ? settings.getProjectSettings() : settings.getGlobalSettings()).packages?.find(p => sourceOf(p) === source);
     if (!entry) return undefined;
     let path: string | undefined;
     try { path = pm.getInstalledPath(source, scope); } catch {}
     if (kindOf(source) === "local" && !path) return undefined;
-    return { entry, install: kindOf(source) === "local" ? path! : source };
+    const name = manifest(path).name ?? (path ? basename(path) : source);
+    return { entry, install: kindOf(source) === "local" ? path! : source, name };
+  }
+
+  private undoFile(): string { return join(this.opts.agentDir, "pi-manage", "undo.json"); }
+
+  /** Keeps what Undo needs on disk, so it survives the reload that usually follows an uninstall. */
+  async addUndo(scope: Scope, source: string, info: { entry: PackageSource; install: string; name: string }): Promise<string> {
+    const records = await readJson<UndoRecord[]>(this.undoFile(), []);
+    const id = randomBytes(6).toString("hex");
+    records.push({ id, scope, cwd: scope === "project" ? resolve(this.opts.context().cwd) : undefined, source, removedAt: new Date().toISOString(), ...info });
+    await writeJson(this.undoFile(), records.slice(-MAX_UNDO));
+    return id;
+  }
+
+  /** Uninstalls that can still be undone here: this project's or global ones, not configured again since. */
+  async undoList(): Promise<UndoRecord[]> {
+    const { settings, pm, cwd, trusted } = this.managers();
+    const configured = new Set(this.entries(settings, trusted).map(e => `${e.scope}\n${packageIdentity(pm, sourceOf(e.entry), e.scope, this.opts.agentDir, cwd)}`));
+    return (await readJson<UndoRecord[]>(this.undoFile(), [])).filter(r =>
+      (r.scope === "user" || (trusted && r.cwd === resolve(cwd))) &&
+      !configured.has(`${r.scope}\n${packageIdentity(pm, r.source, r.scope, this.opts.agentDir, cwd)}`));
+  }
+
+  async dropUndo(id: string): Promise<void> {
+    const records = await readJson<UndoRecord[]>(this.undoFile(), []);
+    await writeJson(this.undoFile(), records.filter(r => r.id !== id));
+  }
+
+  /**
+   * Turns one resource of a package on or off, writing the same +path / -path patterns as `pi config`.
+   * Only +/- patterns mean "everything else as usual", so turning a resource back on just drops its -path;
+   * +path is added only when other include / exclude patterns would still leave it out, and a type set to
+   * [] (none) becomes [path].
+   */
+  async setResource(scope: Scope, source: string, type: ResourceType, path: string, enabled: boolean): Promise<void> {
+    const { settings, pm, trusted } = this.managers();
+    if (scope === "project" && !trusted) throw new ManageError("notTrusted", [], 403);
+    if (!RESOURCE_TYPES.includes(type) || !path || path.startsWith("/") || path.split(/[\\/]/).includes("..")) throw new ManageError("notFound", [], 404);
+    const packages = [...(scope === "project" ? settings.getProjectSettings() : settings.getGlobalSettings()).packages ?? []];
+    const i = packages.findIndex(p => sourceOf(p) === source);
+    if (i < 0) throw new ManageError("notFound", [], 404);
+    if (isDisabled(packages[i]!)) throw new ManageError("packageDisabled", [], 409);
+    if (!enabled && this.isSelf(pm.getInstalledPath(source, scope))) throw new ManageError("self", [], 409);
+    const entry = typeof packages[i] === "string" ? { source } : { ...(packages[i] as Exclude<PackageSource, string>) };
+    const current = entry[type];
+    if (current?.length === 0) {
+      // [] loads none of this type: turning one on means loading just that one.
+      if (enabled) entry[type] = [path];
+    } else {
+      let rest = (current ?? []).filter(p => !(/^[+-]/.test(p) && p.slice(1) === path));
+      // A plain include of exactly this path (what turning one on in a [] type writes) is simply taken out.
+      const included = rest.includes(path);
+      if (!enabled && included) rest = rest.filter(p => p !== path);
+      else if (!enabled) rest.push(`-${path}`);
+      else if (rest.some(p => !/^[+-]/.test(p))) rest.push(`+${path}`);
+      entry[type] = rest.length ? rest : !enabled && included ? [] : undefined;
+    }
+    const hasFilters = RESOURCE_TYPES.some(t => entry[t] !== undefined) || entry.autoload !== undefined;
+    packages[i] = hasFilters ? entry : source;
+    if (scope === "project") settings.setProjectPackages(packages); else settings.setPackages(packages);
+    await settings.flush();
   }
 
   /** After Undo reinstalled a package, put its old settings entry back in place of the fresh one. */
@@ -316,6 +371,26 @@ export class PackageService {
 }
 
 export const packageKey = (scope: string, source: string) => `${scope}\n${source}`;
+
+export interface UndoRecord {
+  id: string; scope: Scope; source: string; name: string; removedAt: string;
+  /** Project uninstalls only undo in the same project. */
+  cwd?: string;
+  entry: PackageSource; install: string;
+}
+
+const MAX_UNDO = 10;
+
+async function readJson<T>(file: string, fallback: T): Promise<T> {
+  try { return JSON.parse(await readFile(file, "utf8")); } catch { return fallback; }
+}
+
+async function writeJson(file: string, data: unknown): Promise<void> {
+  const tmp = `${file}.${process.pid}.tmp`;
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(tmp, JSON.stringify(data, null, 2));
+  await rename(tmp, file);
+}
 
 /**
  * The identity pi dedupes packages by: npm name, git host/path, or resolved local path.

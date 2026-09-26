@@ -108,8 +108,18 @@ h2 { font-size: 15px; margin: 0; font-weight: 650; }
 .pkg .files { grid-column: 2 / -1; margin-top: 6px; padding: 8px 12px; border-radius: 8px; background: var(--bg); font-size: 12.5px; }
 .pkg .files div + div { margin-top: 6px; }
 .pkg .files .t { color: var(--faint); font-size: 11.5px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; }
-.pkg .files code { display: block; overflow-wrap: anywhere; }
-.pkg .files code.off { color: var(--faint); text-decoration: line-through; }
+.pkg .files code { overflow-wrap: anywhere; min-width: 0; }
+.pkg .files .hint { margin-top: 8px; }
+.rf { display: flex; align-items: center; gap: 8px; padding: 2px 0; cursor: pointer; }
+.rf input { accent-color: var(--accent); margin: 0; flex: none; }
+.rf.off code { color: var(--faint); text-decoration: line-through; }
+.rf.locked { cursor: default; }
+.recent { margin-top: 14px; }
+.recent .rrow { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.recent h2 + .faint { margin: 2px 0 10px; }
+.recent .rrow > div { flex: 1; min-width: 0; }
+.recent .name { font-weight: 600; }
+.recent .src { font: 12px var(--mono); color: var(--faint); overflow-wrap: anywhere; }
 .pkg .side { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .pkg .acts { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
 .tag { font-size: 11px; padding: 0 6px; border-radius: 4px; background: var(--user); color: var(--muted); white-space: nowrap; font-weight: 550; line-height: 18px; }
@@ -216,6 +226,8 @@ const L = {
     removeBody: "会删除下载的文件，并从设置中移除；本地路径的插件只从设置中移除，不删除你的文件。卸载后可以撤销。",
     disableHint: "只是暂时不想用？停用会保留文件和设置，随时可以再启用。", disableInstead: "改为停用", cancel: "取消",
     undo: "撤销", removedToast: n => `已卸载 ${n}`,
+    recentlyRemoved: "最近卸载", recentlyRemovedLead: "重新加载或重启 pi 之后也能撤销，保留最近 10 次。", removedAt: t => `卸载于 ${t}`,
+    resHint: "取消勾选只停用这一项，和 pi config 写的设置相同。", resNeedEnabled: "插件已停用，先启用它再调整单个资源",
     reloadWaiting: "等 pi 空闲后自动重新加载", reloadQueuedToast: "pi 正在工作，完成后会自动重新加载",
     confirmRemoveSelf: "选中的插件里包含插件管理器本身，它会被跳过。",
     pendingText: "改动需要重新加载 pi 才会生效", reloadNow: "重新加载", reloading: "正在重新加载 pi…", reloaded: "pi 已重新加载，改动已生效",
@@ -252,6 +264,8 @@ const L = {
     removeBody: "Downloaded files are deleted and the settings entry is removed; local-path packages are only removed from settings, your files stay. You can undo it afterwards.",
     disableHint: "Just want it out of the way for now? Disabling keeps the files and settings, and can be turned back on at any time.", disableInstead: "Disable instead", cancel: "Cancel",
     undo: "Undo", removedToast: n => `Uninstalled ${n}`,
+    recentlyRemoved: "Recently uninstalled", recentlyRemovedLead: "Still undoable after a reload or restart; the last 10 are kept.", removedAt: t => `uninstalled ${t}`,
+    resHint: "Untick to turn off just this one; the same setting pi config writes.", resNeedEnabled: "The package is disabled; enable it to change single resources",
     reloadWaiting: "Reloads automatically once pi is idle", reloadQueuedToast: "pi is working; it will reload when it finishes",
     confirmRemoveSelf: "The package manager itself is selected and will be skipped.",
     pendingText: "Reload pi to apply changes", reloadNow: "Reload", reloading: "Reloading pi…", reloaded: "pi reloaded; changes are live",
@@ -297,7 +311,7 @@ async function api(path, body, signal) {
 const params = new URLSearchParams(location.search);
 const S = {
   tab: params.get("tab") === "discover" ? "discover" : "installed",
-  packages: [], removed: [], trusted: false, cwd: "", loaded: false, error: "",
+  packages: [], removed: [], undo: [], trusted: false, cwd: "", loaded: false, error: "",
   updates: null, checking: false,
   filter: "", view: "all", selected: new Set(), open: new Set(),
   status: { busy: false, pendingReload: false, canReload: false, jobs: [] },
@@ -311,7 +325,7 @@ const S = {
 async function loadPackages() {
   try {
     const d = await api("/packages");
-    Object.assign(S, { packages: d.packages, removed: d.removed || [], trusted: d.trusted, cwd: d.cwd, loaded: true, error: "" });
+    Object.assign(S, { packages: d.packages, removed: d.removed || [], undo: d.undo || [], trusted: d.trusted, cwd: d.cwd, loaded: true, error: "" });
     if (d.updates) S.updates = d.updates;
     S.status.pendingReload = d.pendingReload;
     const keys = new Set(d.packages.map(key));
@@ -332,7 +346,7 @@ async function poll() {
       if (before && before !== j.state && (j.state === "done" || j.state === "error")) {
         finished = true;
         const what = L.jobAct[j.action];
-        if (j.state === "done" && j.undoable) toast(L.removedToast(shortName(j.source)), { label: L.undo, run: () => undo(j.id) });
+        if (j.state === "done" && j.undoable) toast(L.removedToast(shortName(j.source)), { label: L.undo, run: () => undo(j.undoId) });
         else toast(j.state === "done" ? L.done(what) : L.failed(what) + (j.error ? (LANG === "zh" ? "：" : ": ") + j.error : ""));
         if (j.state === "error") S.openJobs.add(j.id);
       }
@@ -485,7 +499,7 @@ function renderJobs() {
       const icon = j.state === "running" ? '<span class="spin"></span>' : j.state === "done" ? "✓" : j.state === "error" ? "!" : "…";
       const open = S.openJobs.has(j.id) || j.state === "running";
       return `<div class="job ${j.state}">
-        <div class="jh"><button data-job="${j.id}"><span class="st">${icon}</span><span class="what">${esc(L.jobAct[j.action])}</span><span class="src">${esc(j.source || "")}</span><span class="faint">${esc(L.jobState[j.state])} · ${esc(fmtTime(j.started))}</span></button>${j.undoable ? `<button class="btn small" data-undo="${j.id}">${esc(L.undo)}</button>` : ""}</div>
+        <div class="jh"><button data-job="${j.id}"><span class="st">${icon}</span><span class="what">${esc(L.jobAct[j.action])}</span><span class="src">${esc(j.source || "")}</span><span class="faint">${esc(L.jobState[j.state])} · ${esc(fmtTime(j.started))}</span></button>${j.undoable ? `<button class="btn small" data-undo="${esc(j.undoId)}">${esc(L.undo)}</button>` : ""}</div>
         ${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}
         ${open && j.log.length ? `<pre data-log="${j.id}">${esc(j.log.join("\n"))}</pre>` : ""}
       </div>`;
@@ -536,7 +550,12 @@ function renderInstalled() {
       <button class="btn small danger" data-bulk="remove">${esc(L.remove)}</button>
       <button class="btn small ghost" data-bulk="clear">${esc(L.clearSel)}</button></div>` : ""}
     ${S.removed.length ? `<div class="notice" title="${esc(S.removed.map(r => r.source).join("\n"))}">${esc(L.removedNote(S.removed.map(r => shortName(r.source)).join(LANG === "zh" ? "、" : ", ")))}</div>` : ""}
-    <div class="list">${!S.loaded ? `<div class="empty"><span class="spin"></span></div>` : !S.packages.length ? `<div class="empty">${esc(L.empty)}</div>` : !list.length ? `<div class="empty">${esc(L.noMatch)}</div>` : list.map(pkgRow).join("")}</div>`;
+    <div class="list">${!S.loaded ? `<div class="empty"><span class="spin"></span></div>` : !S.packages.length ? `<div class="empty">${esc(L.empty)}</div>` : !list.length ? `<div class="empty">${esc(L.noMatch)}</div>` : list.map(pkgRow).join("")}</div>
+    ${S.undo.length ? `<div class="card recent"><h2>${esc(L.recentlyRemoved)}</h2><div class="faint">${esc(L.recentlyRemovedLead)}</div>${S.undo.map(u => `
+      <div class="rrow"><div>
+        <span class="name">${esc(u.name)}</span> <span class="tag ${u.scope === "project" ? "project" : ""}">${esc(u.scope === "project" ? L.scopeProject : L.scopeUser)}</span>
+        <div class="src">${esc(u.source)} · ${esc(L.removedAt(fmtDate(u.removedAt) + " " + fmtTime(u.removedAt)))}</div>
+      </div><button class="btn small" data-undo="${esc(u.id)}">${esc(L.undo)}</button></div>`).join("")}</div>` : ""}`;
   $("src").value = typed;
   if (focus && $(focus)) { $(focus).focus(); try { if (caret != null) $(focus).setSelectionRange(caret, caret); } catch {} }
 }
@@ -556,9 +575,14 @@ function pkgRow(p) {
     p.pending ? `<span class="tag pend" title="${esc(L.pendingTip)}">${esc(L.pending[p.pending])}</span>` : "",
   ].join("");
   const summary = res.length
-    ? res.map(([t, r]) => `${r.length} ${esc(L.resTypes[t])}`).join(" · ") + ` <button data-files="${esc(k)}">${esc(S.open.has(k) ? L.hideFiles : L.showFiles)}</button>`
+    ? res.map(([t, r]) => { const on = r.filter(f => f.enabled).length; return `${on === r.length || !p.enabled ? r.length : `${on}/${r.length}`} ${esc(L.resTypes[t])}`; }).join(" · ") + ` <button data-files="${esc(k)}">${esc(S.open.has(k) ? L.hideFiles : L.showFiles)}</button>`
     : p.overridden ? esc(L.overriddenRes) : p.installed ? esc(L.noRes) : "";
-  const files = S.open.has(k) && res.length ? `<div class="files">${res.map(([t, r]) => `<div><div class="t">${esc(L.resTypes[t])}</div>${r.map(f => `<code class="${f.enabled ? "" : "off"}">${esc(f.path)}</code>`).join("")}</div>`).join("")}</div>` : "";
+  // Single resources change only on an enabled, loaded copy; the manager never unticks its own entry point.
+  const lock = !p.installed ? L.missing : !p.enabled ? L.resNeedEnabled : p.overridden ? L.overriddenTip : "";
+  const files = S.open.has(k) && res.length ? `<div class="files">${res.map(([t, r]) => `<div><div class="t">${esc(L.resTypes[t])}</div>${r.map(f => {
+    const locked = lock || (p.self && f.enabled ? L.selfTip : "");
+    return `<label class="rf ${f.enabled ? "" : "off"} ${locked ? "locked" : ""}"${locked ? ` title="${esc(locked)}"` : ""}><input type="checkbox" data-res="${esc(k)}" data-rt="${t}" data-rp="${esc(f.path)}"${f.enabled ? " checked" : ""}${locked ? " disabled" : ""}><code>${esc(f.path)}</code></label>`;
+  }).join("")}</div>`).join("")}<div class="faint hint">${esc(lock || L.resHint)}</div></div>` : "";
   const homepage = p.homepage ? ` · <a href="${esc(p.homepage)}" target="_blank" rel="noopener noreferrer">${esc(L.home)}</a>` : "";
   return `<div class="pkg ${on ? "" : "off"} ${p.overridden ? "shadowed" : ""}" data-key="${esc(k)}">
     <input type="checkbox" data-sel="${esc(k)}" ${S.selected.has(k) ? "checked" : ""}>
@@ -623,7 +647,7 @@ document.addEventListener("click", e => {
   if (d.view) { S.view = d.view; render(); return; }
   if (d.files) { S.open.has(d.files) ? S.open.delete(d.files) : S.open.add(d.files); render(); return; }
   if (d.job) { const id = Number(d.job); S.openJobs.has(id) ? S.openJobs.delete(id) : S.openJobs.add(id); render(); return; }
-  if (d.undo) { undo(Number(d.undo)); return; }
+  if (d.undo) { undo(d.undo); return; }
   if (d.act === "clear-jobs") { act(() => api("/jobs/clear", {})); return; }
   if (d.act === "check") { checkUpdates(); return; }
   if (d.act === "update-all") { startJob("/update", { all: true }); return; }
@@ -645,6 +669,11 @@ document.addEventListener("click", e => {
 document.addEventListener("change", e => {
   const t = e.target;
   if (t.dataset.sel) { t.checked ? S.selected.add(t.dataset.sel) : S.selected.delete(t.dataset.sel); render(); }
+  if (t.dataset.res) {
+    const p = pkgBy(t.dataset.res);
+    if (p) api("/resource", { scope: p.scope, source: p.source, type: t.dataset.rt, path: t.dataset.rp, enabled: t.checked })
+      .catch(e => toast(e.message)).then(loadPackages).then(poll);
+  }
   if (t.id === "installScope") S.installScope = t.value;
   if (t.id === "searchScope") S.search.scope = t.value;
 });

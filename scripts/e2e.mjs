@@ -86,7 +86,7 @@ try {
   const job2 = (await call("/remove", { scope: "user", source: listed.source })).job;
   const removed = await poll(async () => { const j = await call(`/job?id=${job2.id}`); return j.state === "done" || j.state === "error" ? j : undefined; }, "the uninstall");
   if (removed.state !== "done" || !removed.undoable) throw new Error(`uninstall: ${JSON.stringify(removed)}`);
-  const undo = (await call("/undo", { id: job2.id })).job;
+  const undo = (await call("/undo", { id: removed.undoId })).job;
   const undone = await poll(async () => { const j = await call(`/job?id=${undo.id}`); return j.state === "done" || j.state === "error" ? j : undefined; }, "the undo");
   if (undone.state !== "done") throw new Error(`undo failed: ${undone.error}`);
   const again = (await call("/packages")).packages.find(p => p.name === "probe");
@@ -100,6 +100,24 @@ try {
   status = await poll(async () => { const s = await call("/status"); return s.pendingReload ? undefined : s; }, "the page to settle after reload");
   const after = (await call("/packages")).packages.find(p => p.name === "probe");
   if (after.pending) throw new Error(`probe still pending after reload: ${after.pending}`);
+
+  step("untick one resource: the row says it changes on reload");
+  await call("/resource", { scope: "user", source: after.source, type: "extensions", path: "probe.ts", enabled: false });
+  const ticked = (await call("/packages")).packages.find(p => p.name === "probe");
+  if (ticked.pending !== "changed" || ticked.resources.extensions[0].enabled) throw new Error(`resource toggle: ${JSON.stringify(ticked)}`);
+  await call("/resource", { scope: "user", source: after.source, type: "extensions", path: "probe.ts", enabled: true });
+
+  step("uninstall, reload, then Undo still works");
+  const job3 = (await call("/remove", { scope: "user", source: after.source })).job;
+  await poll(async () => { const j = await call(`/job?id=${job3.id}`); return j.state === "done" ? j : undefined; }, "the uninstall");
+  await call("/reload", {});
+  await poll(async () => { const s = await call("/status"); return !s.pendingReload && !s.jobs.length ? s : undefined; }, "the reload");
+  const record = (await call("/packages")).undo.find(u => u.name === "probe");
+  if (!record) throw new Error("Undo was lost with the reload");
+  const job4 = (await call("/undo", { id: record.id })).job;
+  const back = await poll(async () => { const j = await call(`/job?id=${job4.id}`); return j.state === "done" || j.state === "error" ? j : undefined; }, "the undo");
+  if (back.state !== "done") throw new Error(`undo after reload failed: ${back.error}`);
+  if (!(await call("/packages")).packages.some(p => p.name === "probe")) throw new Error("probe did not come back");
   console.log("\n✔ reload works end to end inside pi");
 } catch (e) {
   failed = true;

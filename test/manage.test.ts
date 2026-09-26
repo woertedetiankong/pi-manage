@@ -314,7 +314,16 @@ test("undo after uninstall reinstalls and restores the exact settings entry", as
   assert.equal(done.undoable, true);
   assert.equal(await byName("beta"), undefined);
 
-  const { status, data } = await call("/undo", { id: removed.id });
+  // pi reloads: a new runtime, new jobs, and Undo is still there.
+  const before2 = app;
+  app = new ManageApp({ hub, service: before2.service, webFile: join(dir, "manage.html") });
+  app.session = before2.session;
+  hub.mount(app);
+  const listed = (await call("/packages")).data.undo;
+  assert.equal(listed[0].name, "beta");
+  assert.equal(listed[0].id, done.undoId);
+
+  const { status, data } = await call("/undo", { id: done.undoId });
   assert.equal(status, 200, data.error);
   assert.equal(data.job.action, "restore");
   const restored = await waitJob(data.job.id);
@@ -322,9 +331,10 @@ test("undo after uninstall reinstalls and restores the exact settings entry", as
   assert.match(restored.log[0], /^\$ pi install \/.*beta --no-approve$/, "local packages reinstall from their resolved path");
   assert.deepEqual(globalSettings().packages.find((x: any) => (x.source ?? x) === p.source), before);
   const back = await byName("beta");
-  assert.deepEqual([back.enabled, back.pending], [false, undefined], "back to what pi has loaded: nothing to reload");
-  assert.equal((await call(`/job?id=${removed.id}`)).data.undoable, false);
-  assert.equal((await call("/undo", { id: removed.id }, "en")).status, 409, "an uninstall is undone once");
+  // This runtime loaded without beta (the reload after the uninstall), so bringing it back needs a reload too.
+  assert.deepEqual([back.enabled, back.pending], [false, "added"]);
+  assert.equal((await call("/packages")).data.undo.some((u: any) => u.id === done.undoId), false);
+  assert.equal((await call("/undo", { id: done.undoId }, "en")).status, 409, "an uninstall is undone once");
   // Enabling still brings back the filter from before the disable.
   await call("/enable", { scope: "user", source: p.source });
   assert.deepEqual(globalSettings().packages.find((x: any) => (x.source ?? x) === p.source), { source: p.source, prompts: [] });
@@ -372,8 +382,47 @@ test("reload waits until pi and the job queue are idle", async () => {
   app.session = saved;
 });
 
-test("clearing finished jobs keeps uninstalls that can still be undone", async () => {
+test("single resources turn on and off with pi config's patterns", async () => {
+  const beta_ = await byName("beta");
+  const entry = () => globalSettings().packages.find((x: any) => (x.source ?? x) === beta_.source);
+  const res = async (type: string) => Object.fromEntries((await byName("beta")).resources[type].map((r: any) => [r.path, r.enabled]));
+  const set = (type: string, path: string, enabled: boolean, lang = "zh") => call("/resource", { scope: "user", source: beta_.source, type, path, enabled }, lang);
+  assert.deepEqual(entry(), { source: beta_.source, prompts: [] });
+
+  assert.equal((await set("extensions", "extensions/two.ts", false)).status, 200);
+  assert.deepEqual(entry().extensions, ["-extensions/two.ts"]);
+  assert.deepEqual(await res("extensions"), { "extensions/one.ts": true, "extensions/two.ts": false }, "pi resolves it the same way");
+  await set("extensions", "extensions/two.ts", true);
+  assert.deepEqual(entry(), { source: beta_.source, prompts: [] }, "back on: the pattern is simply gone");
+
+  // prompts: [] loads none; ticking one loads just that one, unticking goes back to [].
+  await set("prompts", "prompts/review.md", true);
+  assert.deepEqual(entry().prompts, ["prompts/review.md"]);
+  assert.deepEqual(await res("prompts"), { "prompts/review.md": true });
+  await set("prompts", "prompts/review.md", false);
+  assert.deepEqual(entry(), { source: beta_.source, prompts: [] });
+  assert.deepEqual(await res("prompts"), { "prompts/review.md": false });
+
+  // Everything back on: the entry turns back into a plain string.
+  await set("prompts", "prompts/review.md", true);
+  const s = globalSettings(); s.packages = s.packages.map((x: any) => (x.source ?? x) === beta_.source ? { source: beta_.source, prompts: ["-prompts/review.md"] } : x);
+  writeFileSync(join(agentDir, "settings.json"), JSON.stringify(s));
+  await set("prompts", "prompts/review.md", true);
+  assert.equal(entry(), beta_.source);
+  assert.equal((await byName("beta")).filtered, false);
+
+  assert.equal((await set("extensions", "../evil.ts", false)).status, 404);
+  assert.equal((await call("/resource", { scope: "user", source: self, type: "extensions", path: "index.ts", enabled: false })).status, 409, "never its own entry point");
+  await call("/disable", { scope: "user", source: beta_.source });
+  const off = await set("extensions", "extensions/one.ts", false, "en");
+  assert.equal(off.status, 409);
+  assert.match(off.data.error, /enable it before/);
+  await call("/enable", { scope: "user", source: beta_.source });
+});
+
+test("clearing finished jobs; Undo stays under recently uninstalled", async () => {
   const { data } = await call("/jobs/clear", {});
+  assert.deepEqual(data.jobs, []);
   // alpha's uninstall was never undone.
-  assert.deepEqual(data.jobs.map((j: any) => [j.action, j.undoable]), [["remove", true]]);
+  assert.deepEqual((await call("/packages")).data.undo.map((u: any) => u.name), ["alpha"]);
 });

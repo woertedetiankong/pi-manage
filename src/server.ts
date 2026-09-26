@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import type { WebApp, WebHub, WebLanguage, WebRequest } from "./hub.ts";
 import { type Lang, localize, ManageError, requestLang } from "./i18n.ts";
-import { isDisabled, normalizeSource, type PackageInfo, packageKey, type PackageService, type PackageSource, type Scope } from "./packages.ts";
+import { isDisabled, normalizeSource, type PackageInfo, packageKey, type PackageService, type PackageSource, type ResourceType, type Scope } from "./packages.ts";
 
 export interface ManageOptions {
   hub: WebHub;
@@ -30,11 +30,10 @@ export interface Job {
   error?: string;
   started: string;
   finished?: string;
-  /** An uninstall that Undo can still reverse. */
+  /** An uninstall that Undo can still reverse, and the id of its saved undo record. */
   undoable?: boolean;
+  undoId?: string;
 }
-
-interface Restore { scope: Scope; entry: PackageSource; install: string }
 
 const MAX_JOBS = 30, MAX_LOG = 400;
 
@@ -60,8 +59,8 @@ export class ManageApp implements WebApp {
   /** Every change to packages runs here, one at a time: the pi CLI and this page edit the same settings file. */
   private queue: Promise<unknown> = Promise.resolve();
   private updates?: { keys: string[]; checked: string };
-  /** Undo data for finished uninstalls, by job id. */
-  private restores = new Map<number, Restore>();
+  /** Undo records being restored right now, so a double click cannot start two. */
+  private undoing = new Set<string>();
   /** Reload asked for while pi or a job was busy; fires once both are idle. */
   private reloadQueued = false;
   private reloadTimer?: ReturnType<typeof setInterval>;
@@ -145,7 +144,8 @@ export class ManageApp implements WebApp {
   /** Queues a pi CLI run and returns at once; the page follows it through /status. */
   enqueue(action: JobAction, scope: Scope, source: string | undefined, lang: Lang, hooks: { after?: () => Promise<void>; failed?: () => void } = {}): Job {
     const args = this.service.args(action === "updateAll" ? "update" : action === "restore" ? "install" : action, source, scope);
-    const restore = action === "remove" ? this.service.undoInfo(scope, source!) : undefined;
+    // Read before the uninstall: afterwards the entry is gone.
+    const undoInfo = action === "remove" ? this.service.undoInfo(scope, source!) : undefined;
     const job: Job = { id: this.nextId++, action, source, scope, state: "queued", log: [], started: new Date().toISOString() };
     this.jobs.push(job);
     // Finished jobs make room first; running and queued ones are never dropped.
@@ -161,7 +161,7 @@ export class ManageApp implements WebApp {
         await this.service.runPi(args, line => { job.log.push(line); if (job.log.length > MAX_LOG) job.log.splice(1, job.log.length - MAX_LOG); });
         await hooks.after?.();
         job.state = "done";
-        if (restore) { this.restores.set(job.id, { scope, ...restore }); job.undoable = true; }
+        if (undoInfo) { job.undoId = await this.service.addUndo(scope, source!, undoInfo); job.undoable = true; }
         if (action === "update") this.updated.add(packageKey(scope, source!));
         if (action === "updateAll") for (const k of Object.keys(this.safeSnapshot())) this.updated.add(k);
         if (this.updates && action !== "install") {
@@ -180,15 +180,19 @@ export class ManageApp implements WebApp {
   }
 
   /** Reinstalls what an uninstall removed and restores its settings entry exactly. */
-  undo(id: number, lang: Lang): Job {
-    const restore = this.restores.get(id), job = this.jobs.find(j => j.id === id);
-    if (!restore || !job?.undoable) throw new ManageError("cannotUndo", [], 409);
-    job.undoable = false;
-    return this.enqueue("restore", restore.scope, restore.install, lang, {
-      after: async () => { await this.service.restoreEntry(restore.scope, restore.entry); this.restores.delete(id); },
-      // Offline or similar: Undo stays available to try again.
-      failed: () => { job.undoable = true; },
-    });
+  async undo(id: string, lang: Lang): Promise<Job> {
+    const record = (await this.service.undoList()).find(r => r.id === id);
+    if (!record || this.undoing.has(id)) throw new ManageError("cannotUndo", [], 409);
+    this.undoing.add(id);
+    const mark = (undoable: boolean) => { for (const j of this.jobs) if (j.undoId === id) j.undoable = undoable; };
+    mark(false);
+    try {
+      return this.enqueue("restore", record.scope, record.install, lang, {
+        after: async () => { await this.service.restoreEntry(record.scope, record.entry); await this.service.dropUndo(id); this.undoing.delete(id); },
+        // Offline or similar: Undo stays available to try again.
+        failed: () => { this.undoing.delete(id); mark(true); },
+      });
+    } catch (e) { this.undoing.delete(id); mark(true); throw e; }
   }
 
   private status() {
@@ -206,7 +210,9 @@ export class ManageApp implements WebApp {
       case "GET /packages": {
         const list = await this.service.list(), { byKey, removed } = this.pending();
         const packages: (PackageInfo & { pending?: Pending })[] = list.packages.map(p => ({ ...p, pending: byKey.get(packageKey(p.scope, p.source)) }));
-        return { ...list, packages, removed, updates: this.updates, pendingReload: byKey.size > 0 || removed.length > 0, busy: this.busy() };
+        const undo = (await this.service.undoList()).filter(r => !this.undoing.has(r.id)).reverse()
+          .map(({ id, name, source, scope, removedAt }) => ({ id, name, source, scope, removedAt }));
+        return { ...list, packages, removed, undo, updates: this.updates, pendingReload: byKey.size > 0 || removed.length > 0, busy: this.busy() };
       }
       case "GET /job": {
         const job = this.jobs.find(j => j.id === Number(req.query.get("id")));
@@ -229,10 +235,13 @@ export class ManageApp implements WebApp {
         this.updates = { keys: await this.service.checkUpdates(), checked: new Date().toISOString() };
         return this.updates;
       }
-      case "POST /undo": return { job: this.undo(Number(body.id), lang) };
+      case "POST /undo": return { job: await this.undo(String(body.id ?? ""), lang) };
+      case "POST /resource":
+        await this.serial(() => this.service.setResource(scope, source, body.type as ResourceType, String(body.path ?? ""), !!body.enabled));
+        return { ok: true };
       case "POST /jobs/clear":
-        // Uninstalls that can still be undone stay, so Undo is not lost with the log.
-        this.jobs = this.jobs.filter(j => j.state === "queued" || j.state === "running" || j.undoable);
+        // Undo lives on in "recently uninstalled", so the log can go.
+        this.jobs = this.jobs.filter(j => j.state === "queued" || j.state === "running");
         return this.status();
       case "GET /search": return { results: await this.service.search(req.query.get("q") ?? "", req.signal) };
       case "POST /reload": return this.requestReload();
