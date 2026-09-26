@@ -31,9 +31,13 @@ export default function piManage(pi: ExtensionAPI): void {
     hub().mount(manage);
   });
 
+  // pi will not continue on its own: a reload the page queued can run now.
+  pi.on("agent_settled", () => { app?.tryReload(); });
+
   pi.on("session_shutdown", async event => {
     if (!app) return;
     app.session = undefined;
+    if (event.reason === "quit" || event.reason === "reload") app.cancelReload();
     // Reload brings new code: leave the shared hub (it stops once every app has left) and remount on session_start.
     if (event.reason === "quit" || event.reason === "reload") { await hub().unmount(app.id); app = undefined; }
   });

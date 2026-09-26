@@ -127,7 +127,7 @@ test("the page is served and starts with nothing to reload", async () => {
   const page = await fetch(new URL(hub.url("manage")!).origin + "/manage/");
   assert.equal(await page.text(), "<p>manage</p>");
   const { data } = await call("/status");
-  assert.deepEqual(data, { busy: false, pendingReload: false, canReload: true, jobs: [] });
+  assert.deepEqual(data, { busy: false, pendingReload: false, canReload: true, reloadQueued: false, jobs: [] });
   assert.deepEqual(await packages(), []);
 });
 
@@ -301,15 +301,69 @@ test("search asks the registry for pi-package", async () => {
   }].map(r => JSON.parse(JSON.stringify(r))));
 });
 
-test("reload goes through the session only when pi is idle", async () => {
+test("undo after uninstall reinstalls and restores the exact settings entry", async () => {
+  const p = await byName("beta");
+  // Disabled, with a pi config filter kept aside: Undo must bring back exactly this.
+  await call("/disable", { scope: "user", source: p.source });
+  const before = globalSettings().packages.find((x: any) => (x.source ?? x) === p.source);
+  app.loaded();
+
+  const removed = (await call("/remove", { scope: "user", source: p.source })).data.job;
+  const done = await waitJob(removed.id);
+  assert.equal(done.state, "done");
+  assert.equal(done.undoable, true);
+  assert.equal(await byName("beta"), undefined);
+
+  const { status, data } = await call("/undo", { id: removed.id });
+  assert.equal(status, 200, data.error);
+  assert.equal(data.job.action, "restore");
+  const restored = await waitJob(data.job.id);
+  assert.equal(restored.state, "done", restored.log.join("\n"));
+  assert.match(restored.log[0], /^\$ pi install \/.*beta --no-approve$/, "local packages reinstall from their resolved path");
+  assert.deepEqual(globalSettings().packages.find((x: any) => (x.source ?? x) === p.source), before);
+  const back = await byName("beta");
+  assert.deepEqual([back.enabled, back.pending], [false, undefined], "back to what pi has loaded: nothing to reload");
+  assert.equal((await call(`/job?id=${removed.id}`)).data.undoable, false);
+  assert.equal((await call("/undo", { id: removed.id }, "en")).status, 409, "an uninstall is undone once");
+  // Enabling still brings back the filter from before the disable.
+  await call("/enable", { scope: "user", source: p.source });
+  assert.deepEqual(globalSettings().packages.find((x: any) => (x.source ?? x) === p.source), { source: p.source, prompts: [] });
+});
+
+test("reload waits until pi and the job queue are idle", async () => {
+  reloads.length = 0;
+  // pi is busy: the reload is queued, not refused.
   idle = false;
-  const busy = await call("/reload", {}, "en");
-  assert.equal(busy.status, 409);
-  assert.match(busy.data.error, /pi is working/);
+  let r = await call("/reload", {});
+  assert.deepEqual(r.data, { queued: true });
+  assert.equal((await call("/status")).data.reloadQueued, true);
+  await new Promise(res => setTimeout(res, 1200));
+  assert.equal(reloads.length, 0);
   idle = true;
-  assert.equal((await call("/reload", {})).status, 200);
+  // agent_settled calls tryReload; the timer would get there within a second anyway.
+  assert.equal(app.tryReload(), true);
   assert.equal(reloads.length, 1);
-  // A new runtime loaded the current configuration.
+  assert.equal((await call("/status")).data.reloadQueued, false);
+
+  // A running job holds the reload until it finishes.
+  const job = (await call("/install", { source: join(dir, "missing-again") })).data.job;
+  r = await call("/reload", {});
+  assert.deepEqual(r.data, { queued: true });
+  await waitJob(job.id);
+  assert.equal(reloads.length, 2);
+
+  // Cancel drops a queued reload.
+  idle = false;
+  await call("/reload", {});
+  const cancelled = await call("/reload/cancel", {});
+  assert.equal(cancelled.data.reloadQueued, false);
+  idle = true;
+  await new Promise(res => setTimeout(res, 1200));
+  assert.equal(reloads.length, 2);
+
+  // Idle now: reloads at once.
+  assert.deepEqual((await call("/reload", {})).data, { queued: false });
+  assert.equal(reloads.length, 3);
   app.loaded();
   assert.equal((await call("/status")).data.pendingReload, false);
   const saved = app.session;
@@ -318,7 +372,8 @@ test("reload goes through the session only when pi is idle", async () => {
   app.session = saved;
 });
 
-test("finished jobs can be cleared", async () => {
+test("clearing finished jobs keeps uninstalls that can still be undone", async () => {
   const { data } = await call("/jobs/clear", {});
-  assert.deepEqual(data.jobs, []);
+  // alpha's uninstall was never undone.
+  assert.deepEqual(data.jobs.map((j: any) => [j.action, j.undoable]), [["remove", true]]);
 });

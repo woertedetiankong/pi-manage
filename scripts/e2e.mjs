@@ -82,8 +82,20 @@ try {
   const selfOff = await fetch(api + "/disable", { method: "POST", headers: { "x-token": token, "content-type": "application/json" }, body: JSON.stringify({ scope: "user", source: self.source }) });
   if (selfOff.status !== 409) throw new Error(`disabling itself returned ${selfOff.status}`);
 
-  step("Reload button");
-  await call("/reload", {});
+  step("uninstall, then Undo");
+  const job2 = (await call("/remove", { scope: "user", source: listed.source })).job;
+  const removed = await poll(async () => { const j = await call(`/job?id=${job2.id}`); return j.state === "done" || j.state === "error" ? j : undefined; }, "the uninstall");
+  if (removed.state !== "done" || !removed.undoable) throw new Error(`uninstall: ${JSON.stringify(removed)}`);
+  const undo = (await call("/undo", { id: job2.id })).job;
+  const undone = await poll(async () => { const j = await call(`/job?id=${undo.id}`); return j.state === "done" || j.state === "error" ? j : undefined; }, "the undo");
+  if (undone.state !== "done") throw new Error(`undo failed: ${undone.error}`);
+  const again = (await call("/packages")).packages.find(p => p.name === "probe");
+  if (!again || again.pending !== "added") throw new Error(`probe should be back and pending: ${JSON.stringify(again)}`);
+
+  step("Reload while a job runs: it waits, then reloads by itself");
+  await call("/install", { source: join(dir, "does-not-exist") });
+  const queued = await call("/reload", {});
+  if (!queued.queued) throw new Error("reload should wait for the running job");
   await until(() => notes.find(n => n === "probe loaded (reload)"), "the probe to load after reload");
   status = await poll(async () => { const s = await call("/status"); return s.pendingReload ? undefined : s; }, "the page to settle after reload");
   const after = (await call("/packages")).packages.find(p => p.name === "probe");

@@ -17,7 +17,8 @@ export interface SessionHooks {
   reload(): void;
 }
 
-export type JobAction = "install" | "remove" | "update" | "updateAll";
+/** "restore" is Undo after an uninstall: reinstall, then put the old settings entry back. */
+export type JobAction = "install" | "remove" | "update" | "updateAll" | "restore";
 
 export interface Job {
   id: number;
@@ -29,7 +30,11 @@ export interface Job {
   error?: string;
   started: string;
   finished?: string;
+  /** An uninstall that Undo can still reverse. */
+  undoable?: boolean;
 }
+
+interface Restore { scope: Scope; entry: PackageSource; install: string }
 
 const MAX_JOBS = 30, MAX_LOG = 400;
 
@@ -55,6 +60,11 @@ export class ManageApp implements WebApp {
   /** Every change to packages runs here, one at a time: the pi CLI and this page edit the same settings file. */
   private queue: Promise<unknown> = Promise.resolve();
   private updates?: { keys: string[]; checked: string };
+  /** Undo data for finished uninstalls, by job id. */
+  private restores = new Map<number, Restore>();
+  /** Reload asked for while pi or a job was busy; fires once both are idle. */
+  private reloadQueued = false;
+  private reloadTimer?: ReturnType<typeof setInterval>;
 
   constructor(opts: ManageOptions) {
     this.opts = opts;
@@ -108,9 +118,34 @@ export class ManageApp implements WebApp {
     return run;
   }
 
+  /** Reloads now if pi and the job queue are idle, otherwise as soon as they are. */
+  requestReload(): { queued: boolean } {
+    if (!this.session) throw new ManageError("switching", [], 503);
+    this.reloadQueued = true;
+    if (this.tryReload()) return { queued: false };
+    // agent_settled and finished jobs call tryReload; the timer covers anything else that ends a busy spell.
+    this.reloadTimer ??= setInterval(() => this.tryReload(), 1000);
+    this.reloadTimer.unref?.();
+    return { queued: true };
+  }
+
+  cancelReload(): void {
+    this.reloadQueued = false;
+    if (this.reloadTimer) { clearInterval(this.reloadTimer); this.reloadTimer = undefined; }
+  }
+
+  /** Fires a queued reload when nothing is running; true if it did. */
+  tryReload(): boolean {
+    if (!this.reloadQueued || !this.session || !this.session.idle() || this.busy()) return false;
+    this.cancelReload();
+    this.session.reload();
+    return true;
+  }
+
   /** Queues a pi CLI run and returns at once; the page follows it through /status. */
-  enqueue(action: JobAction, scope: Scope, source: string | undefined, lang: Lang): Job {
-    const args = this.service.args(action === "updateAll" ? "update" : action, source, scope);
+  enqueue(action: JobAction, scope: Scope, source: string | undefined, lang: Lang, hooks: { after?: () => Promise<void>; failed?: () => void } = {}): Job {
+    const args = this.service.args(action === "updateAll" ? "update" : action === "restore" ? "install" : action, source, scope);
+    const restore = action === "remove" ? this.service.undoInfo(scope, source!) : undefined;
     const job: Job = { id: this.nextId++, action, source, scope, state: "queued", log: [], started: new Date().toISOString() };
     this.jobs.push(job);
     // Finished jobs make room first; running and queued ones are never dropped.
@@ -124,7 +159,9 @@ export class ManageApp implements WebApp {
       job.log.push(`$ pi ${args.join(" ")}`);
       try {
         await this.service.runPi(args, line => { job.log.push(line); if (job.log.length > MAX_LOG) job.log.splice(1, job.log.length - MAX_LOG); });
+        await hooks.after?.();
         job.state = "done";
+        if (restore) { this.restores.set(job.id, { scope, ...restore }); job.undoable = true; }
         if (action === "update") this.updated.add(packageKey(scope, source!));
         if (action === "updateAll") for (const k of Object.keys(this.safeSnapshot())) this.updated.add(k);
         if (this.updates && action !== "install") {
@@ -133,16 +170,30 @@ export class ManageApp implements WebApp {
       } catch (e) {
         job.state = "error";
         job.error = localize(e, lang);
+        hooks.failed?.();
       } finally {
         job.finished = new Date().toISOString();
+        this.tryReload();
       }
     });
     return job;
   }
 
+  /** Reinstalls what an uninstall removed and restores its settings entry exactly. */
+  undo(id: number, lang: Lang): Job {
+    const restore = this.restores.get(id), job = this.jobs.find(j => j.id === id);
+    if (!restore || !job?.undoable) throw new ManageError("cannotUndo", [], 409);
+    job.undoable = false;
+    return this.enqueue("restore", restore.scope, restore.install, lang, {
+      after: async () => { await this.service.restoreEntry(restore.scope, restore.entry); this.restores.delete(id); },
+      // Offline or similar: Undo stays available to try again.
+      failed: () => { job.undoable = true; },
+    });
+  }
+
   private status() {
     return {
-      busy: this.busy(), pendingReload: this.pendingReload(), canReload: !!this.session,
+      busy: this.busy(), pendingReload: this.pendingReload(), canReload: !!this.session, reloadQueued: this.reloadQueued,
       jobs: this.jobs.map(j => ({ ...j, log: j.log.slice(-60) })),
     };
   }
@@ -178,17 +229,14 @@ export class ManageApp implements WebApp {
         this.updates = { keys: await this.service.checkUpdates(), checked: new Date().toISOString() };
         return this.updates;
       }
+      case "POST /undo": return { job: this.undo(Number(body.id), lang) };
       case "POST /jobs/clear":
-        this.jobs = this.jobs.filter(j => j.state === "queued" || j.state === "running");
+        // Uninstalls that can still be undone stay, so Undo is not lost with the log.
+        this.jobs = this.jobs.filter(j => j.state === "queued" || j.state === "running" || j.undoable);
         return this.status();
       case "GET /search": return { results: await this.service.search(req.query.get("q") ?? "", req.signal) };
-      case "POST /reload": {
-        if (this.busy()) throw new ManageError("busy", [], 409);
-        if (!this.session) throw new ManageError("switching", [], 503);
-        if (!this.session.idle()) throw new ManageError("agentBusy", [], 409);
-        this.session.reload();
-        return { ok: true };
-      }
+      case "POST /reload": return this.requestReload();
+      case "POST /reload/cancel": this.cancelReload(); return this.status();
       case "POST /open": {
         const pkg = (await this.service.list()).packages.find(p => packageKey(p.scope, p.source) === packageKey(scope, source));
         if (!pkg?.path) throw new ManageError("notFound", [], 404);

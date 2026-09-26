@@ -238,6 +238,33 @@ export class PackageService {
     return [action, source!, ...(scope === "project" ? ["--local"] : []), trust];
   }
 
+  /**
+   * What Undo needs after an uninstall: the settings entry as it was (filters, disabled state) and a source
+   * `pi install` can fetch it from again. Local sources in settings are relative to the settings file, so
+   * those reinstall from the resolved path.
+   */
+  undoInfo(scope: Scope, source: string): { entry: PackageSource; install: string } | undefined {
+    const { settings, pm } = this.managers();
+    const entry = (scope === "project" ? settings.getProjectSettings() : settings.getGlobalSettings()).packages?.find(p => sourceOf(p) === source);
+    if (!entry) return undefined;
+    let path: string | undefined;
+    try { path = pm.getInstalledPath(source, scope); } catch {}
+    if (kindOf(source) === "local" && !path) return undefined;
+    return { entry, install: kindOf(source) === "local" ? path! : source };
+  }
+
+  /** After Undo reinstalled a package, put its old settings entry back in place of the fresh one. */
+  async restoreEntry(scope: Scope, original: PackageSource): Promise<void> {
+    const { settings, pm, cwd } = this.managers();
+    const packages = [...(scope === "project" ? settings.getProjectSettings() : settings.getGlobalSettings()).packages ?? []];
+    const id = packageIdentity(pm, sourceOf(original), scope, this.opts.agentDir, cwd);
+    const i = packages.findIndex(p => packageIdentity(pm, sourceOf(p), scope, this.opts.agentDir, cwd) === id);
+    if (i < 0) return;
+    packages[i] = original;
+    if (scope === "project") settings.setProjectPackages(packages); else settings.setPackages(packages);
+    await settings.flush();
+  }
+
   /** Throws unless the package may be removed from the page. */
   assertRemovable(scope: Scope, source: string): void {
     const { pm } = this.managers();

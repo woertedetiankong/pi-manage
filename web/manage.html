@@ -132,8 +132,9 @@ h2 { font-size: 15px; margin: 0; font-weight: 650; }
 .jobs { margin-bottom: 14px; }
 .jobs .head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .job { border: 1px solid var(--line); border-radius: 8px; margin-top: 6px; overflow: hidden; }
-.job > button { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px 12px; text-align: left; }
-.job > button:hover { background: var(--bg); }
+.job .jh { display: flex; align-items: center; gap: 8px; padding-right: 8px; }
+.job .jh > button[data-job] { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 8px 12px; text-align: left; }
+.job .jh > button[data-job]:hover { background: var(--bg); }
 .job .st { width: 16px; display: grid; place-items: center; flex: none; font-weight: 700; }
 .job.done .st { color: var(--ok); } .job.error .st { color: var(--danger); } .job.queued .st { color: var(--faint); }
 .job .what { font-weight: 550; white-space: nowrap; }
@@ -146,6 +147,15 @@ h2 { font-size: 15px; margin: 0; font-weight: 650; }
 
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: .2s; pointer-events: none; max-width: calc(100vw - 32px); z-index: 30; }
 .toast.show { opacity: 1; transform: translateX(-50%); }
+.toast.act { pointer-events: auto; display: flex; align-items: center; gap: 14px; }
+.toast-act { color: inherit; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
+
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--text); padding: 20px 22px; width: min(460px, calc(100vw - 32px)); box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+dialog::backdrop { background: rgba(10,10,5,.35); }
+dialog h2 { margin-bottom: 8px; }
+dialog p { margin: 0 0 10px; }
+.dlg-list { margin: 0 0 10px; padding-left: 20px; max-height: 180px; overflow-y: auto; }
+.dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }
 
 @media (max-width: 760px) {
   header { height: auto; flex-wrap: wrap; padding: 10px 16px; gap: 10px; }
@@ -163,7 +173,7 @@ h2 { font-size: 15px; margin: 0; font-weight: 650; }
   <div class="brand"><span class="logo">π</span><span class="brand-name" id="brandName">插件</span></div>
   <nav id="pi-web-nav"></nav>
   <div class="spacer"></div>
-  <div class="pending" id="pending" hidden><span class="dot"></span><span id="pendingText"></span><button class="btn small primary" id="reloadBtn"></button></div>
+  <div class="pending" id="pending" hidden><span class="dot"></span><span id="pendingText"></span><button class="btn small primary" id="reloadBtn"></button><button class="btn small ghost" id="cancelReloadBtn" hidden></button></div>
 </header>
 <div class="wrap">
   <h1 id="title"></h1>
@@ -175,7 +185,8 @@ h2 { font-size: 15px; margin: 0; font-weight: 650; }
   <section id="installed"></section>
   <section id="discover" hidden></section>
 </div>
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<dialog id="dlg"></dialog>
 <script>
 const TOKEN = window.piWeb ? window.piWeb.token : "";
 const LANG = window.piWeb && window.piWeb.lang === "en" ? "en" : "zh";
@@ -201,11 +212,15 @@ const L = {
     removedNote: names => `已卸载，但在重新加载前仍在运行：${names}`,
     resTypes: { extensions: "扩展", skills: "技能", prompts: "提示模板", themes: "主题" }, noRes: "没有可加载的资源", showFiles: "查看文件", hideFiles: "收起",
     empty: "还没有安装任何插件，在上面填写来源安装，或去「发现插件」看看。", noMatch: "没有匹配的插件",
-    confirmRemove: names => `卸载 ${names}？\n\n会删除下载的文件，并从设置中移除。本地路径的插件只会从设置中移除，不会删除你的文件。`,
+    removeOne: name => `卸载 ${name}？`, removeMany: n => `卸载 ${n} 个插件？`,
+    removeBody: "会删除下载的文件，并从设置中移除；本地路径的插件只从设置中移除，不删除你的文件。卸载后可以撤销。",
+    disableHint: "只是暂时不想用？停用会保留文件和设置，随时可以再启用。", disableInstead: "改为停用", cancel: "取消",
+    undo: "撤销", removedToast: n => `已卸载 ${n}`,
+    reloadWaiting: "等 pi 空闲后自动重新加载", reloadQueuedToast: "pi 正在工作，完成后会自动重新加载",
     confirmRemoveSelf: "选中的插件里包含插件管理器本身，它会被跳过。",
     pendingText: "改动需要重新加载 pi 才会生效", reloadNow: "重新加载", reloading: "正在重新加载 pi…", reloaded: "pi 已重新加载，改动已生效",
     reloadHint: "也可以在 pi 里输入 /reload",
-    jobsTitle: "操作记录", clearJobs: "清除已完成", jobAct: { install: "安装", remove: "卸载", update: "更新", updateAll: "全部更新" },
+    jobsTitle: "操作记录", clearJobs: "清除已完成", jobAct: { install: "安装", remove: "卸载", update: "更新", updateAll: "全部更新", restore: "撤销卸载" },
     jobState: { queued: "排队中", running: "进行中", done: "完成", error: "失败" },
     queued: what => `已开始${what}`, done: what => `${what}完成`, failed: what => `${what}失败`,
     nowEnabled: n => `已启用 ${n}`, nowDisabled: n => `已停用 ${n}`,
@@ -233,11 +248,15 @@ const L = {
     removedNote: names => `Uninstalled, but still running until reload: ${names}`,
     resTypes: { extensions: "extensions", skills: "skills", prompts: "prompts", themes: "themes" }, noRes: "No loadable resources", showFiles: "Show files", hideFiles: "Hide",
     empty: "No packages yet. Install one above, or browse Discover.", noMatch: "No packages match",
-    confirmRemove: names => `Uninstall ${names}?\n\nDownloaded files are deleted and the settings entry is removed. Local-path packages are only removed from settings; your files stay.`,
+    removeOne: name => `Uninstall ${name}?`, removeMany: n => `Uninstall ${n} packages?`,
+    removeBody: "Downloaded files are deleted and the settings entry is removed; local-path packages are only removed from settings, your files stay. You can undo it afterwards.",
+    disableHint: "Just want it out of the way for now? Disabling keeps the files and settings, and can be turned back on at any time.", disableInstead: "Disable instead", cancel: "Cancel",
+    undo: "Undo", removedToast: n => `Uninstalled ${n}`,
+    reloadWaiting: "Reloads automatically once pi is idle", reloadQueuedToast: "pi is working; it will reload when it finishes",
     confirmRemoveSelf: "The package manager itself is selected and will be skipped.",
     pendingText: "Reload pi to apply changes", reloadNow: "Reload", reloading: "Reloading pi…", reloaded: "pi reloaded; changes are live",
     reloadHint: "You can also type /reload in pi",
-    jobsTitle: "Activity", clearJobs: "Clear finished", jobAct: { install: "Install", remove: "Uninstall", update: "Update", updateAll: "Update all" },
+    jobsTitle: "Activity", clearJobs: "Clear finished", jobAct: { install: "Install", remove: "Uninstall", update: "Update", updateAll: "Update all", restore: "Undo uninstall" },
     jobState: { queued: "queued", running: "running", done: "done", error: "failed" },
     queued: what => `${what} started`, done: what => `${what} finished`, failed: what => `${what} failed`,
     nowEnabled: n => `Enabled ${n}`, nowDisabled: n => `Disabled ${n}`,
@@ -254,7 +273,15 @@ const key = p => p.scope + "\n" + p.source;
 const fmtDate = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleDateString(LANG === "zh" ? "zh-CN" : "en", { year: "numeric", month: "short", day: "numeric" }); };
 const fmtTime = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString(LANG === "zh" ? "zh-CN" : "en", { hour: "2-digit", minute: "2-digit" }); };
 let toastTimer;
-function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 2800); }
+/** A short message; with an action ({ label, run }) it stays longer and gets a button. */
+function toast(msg, action) {
+  const t = $("toast");
+  t.innerHTML = `<span>${esc(msg)}</span>` + (action ? `<button class="toast-act">${esc(action.label)}</button>` : "");
+  t.classList.toggle("act", !!action);
+  if (action) t.querySelector("button").onclick = () => { t.classList.remove("show"); action.run(); };
+  t.classList.add("show"); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), action ? 8000 : 2800);
+}
+const shortName = source => String(source || "").replace(/^(npm:|git:)/, "").replace(/[\\/]+$/, "").replace(/(.)@[^/]*$/, "$1").split(/[\\/]/).pop();
 
 async function api(path, body, signal) {
   let res;
@@ -305,19 +332,20 @@ async function poll() {
       if (before && before !== j.state && (j.state === "done" || j.state === "error")) {
         finished = true;
         const what = L.jobAct[j.action];
-        toast(j.state === "done" ? L.done(what) : L.failed(what) + (j.error ? (LANG === "zh" ? "：" : ": ") + j.error : ""));
+        if (j.state === "done" && j.undoable) toast(L.removedToast(shortName(j.source)), { label: L.undo, run: () => undo(j.id) });
+        else toast(j.state === "done" ? L.done(what) : L.failed(what) + (j.error ? (LANG === "zh" ? "：" : ": ") + j.error : ""));
         if (j.state === "error") S.openJobs.add(j.id);
       }
       S.seenJobs.set(j.id, j.state);
     }
     const wasReloading = S.reloading;
     S.status = st;
-    if (S.reloading && !st.pendingReload) { S.reloading = false; toast(L.reloaded); finished = true; }
+    if (S.reloading && !st.reloadQueued && !st.pendingReload) { S.reloading = false; toast(L.reloaded); finished = true; }
     if (finished || wasReloading !== S.reloading) await loadPackages(); else render();
   } catch {
     // The server blinks during a reload; keep trying.
   }
-  pollTimer = setTimeout(poll, S.status.busy || S.reloading ? 800 : 4000);
+  pollTimer = setTimeout(poll, S.status.busy || (S.reloading && !S.status.reloadQueued) ? 800 : S.status.reloadQueued ? 1500 : 4000);
 }
 
 async function act(fn) {
@@ -346,10 +374,33 @@ async function startJob(path, body) {
 async function removeList(list) {
   const skip = list.filter(p => p.self), go = list.filter(p => !p.self);
   if (!go.length) { toast(L.selfTip); return; }
-  if (!confirm(L.confirmRemove(go.map(p => p.name).join(LANG === "zh" ? "、" : ", ")) + (skip.length ? "\n\n" + L.confirmRemoveSelf : ""))) return;
+  const canDisable = go.some(p => p.enabled);
+  const choice = await ask(`
+    <h2>${esc(go.length === 1 ? L.removeOne(go[0].name) : L.removeMany(go.length))}</h2>
+    ${go.length > 1 ? `<ul class="dlg-list">${go.map(p => `<li>${esc(p.name)}</li>`).join("")}</ul>` : ""}
+    <p class="muted">${esc(L.removeBody)}</p>
+    ${canDisable ? `<div class="notice">${esc(L.disableHint)}</div>` : ""}
+    ${skip.length ? `<p class="faint">${esc(L.confirmRemoveSelf)}</p>` : ""}
+    <div class="dlg-actions">
+      <button class="btn ghost" value="cancel" autofocus>${esc(L.cancel)}</button>
+      ${canDisable ? `<button class="btn primary" value="disable">${esc(L.disableInstead)}</button>` : ""}
+      <button class="btn danger" value="remove">${esc(L.remove)}</button>
+    </div>`);
+  if (choice === "disable") { await setEnabled(go, false); return; }
+  if (choice !== "remove") return;
   for (const p of go) await startJob("/remove", { scope: p.scope, source: p.source });
   for (const p of go) S.selected.delete(key(p));
 }
+
+/** Shows a modal with buttons carrying value="…"; resolves with the chosen value ("" for Esc). */
+function ask(html) {
+  const d = $("dlg");
+  d.innerHTML = `<form method="dialog">${html}</form>`;
+  d.returnValue = "";
+  return new Promise(resolve => { d.addEventListener("close", () => resolve(d.returnValue), { once: true }); d.showModal(); });
+}
+
+function undo(id) { return startJob("/undo", { id }); }
 
 async function updateList(list) {
   for (const p of list.filter(hasUpdate)) await startJob("/update", { scope: p.scope, source: p.source });
@@ -366,7 +417,17 @@ async function checkUpdates(quiet) {
 }
 
 async function reloadPi() {
-  try { await api("/reload", {}); S.reloading = true; render(); poll(); } catch (e) { toast(e.message + " · " + L.reloadHint); }
+  try {
+    const r = await api("/reload", {});
+    S.reloading = true;
+    if (r.queued) toast(L.reloadQueuedToast);
+    render(); poll();
+  } catch (e) { toast(e.message + " · " + L.reloadHint); }
+}
+
+async function cancelReload() {
+  try { S.status = await api("/reload/cancel", {}); } catch (e) { toast(e.message); }
+  S.reloading = false; render();
 }
 
 async function runSearch() {
@@ -398,13 +459,15 @@ function render() {
   document.title = "pi " + L.brand;
   const tabs = [["installed", L.installed, S.packages.length], ["discover", L.discover]];
   $("tabs").innerHTML = tabs.map(([id, label, n]) => `<button data-tab="${id}" class="${S.tab === id ? "on" : ""}">${esc(label)}${n ? `<span class="n">${n}</span>` : ""}</button>`).join("");
-  const pend = S.status.pendingReload || S.reloading;
-  $("pending").hidden = !pend;
-  $("pendingText").textContent = S.reloading ? L.reloading : L.pendingText;
+  const queued = !!S.status.reloadQueued;
+  $("pending").hidden = !(S.status.pendingReload || S.reloading || queued);
+  $("pendingText").textContent = queued ? L.reloadWaiting : S.reloading ? L.reloading : L.pendingText;
+  // Busy is fine: the reload waits for pi and running jobs.
   $("reloadBtn").textContent = L.reloadNow;
-  $("reloadBtn").disabled = S.reloading || S.status.busy;
-  $("reloadBtn").hidden = S.reloading;
+  $("reloadBtn").hidden = S.reloading || queued;
   $("reloadBtn").title = L.reloadHint;
+  $("cancelReloadBtn").textContent = L.cancel;
+  $("cancelReloadBtn").hidden = !queued;
   renderJobs();
   $("installed").hidden = S.tab !== "installed";
   $("discover").hidden = S.tab !== "discover";
@@ -422,7 +485,7 @@ function renderJobs() {
       const icon = j.state === "running" ? '<span class="spin"></span>' : j.state === "done" ? "✓" : j.state === "error" ? "!" : "…";
       const open = S.openJobs.has(j.id) || j.state === "running";
       return `<div class="job ${j.state}">
-        <button data-job="${j.id}"><span class="st">${icon}</span><span class="what">${esc(L.jobAct[j.action])}</span><span class="src">${esc(j.source || "")}</span><span class="faint">${esc(L.jobState[j.state])} · ${esc(fmtTime(j.started))}</span></button>
+        <div class="jh"><button data-job="${j.id}"><span class="st">${icon}</span><span class="what">${esc(L.jobAct[j.action])}</span><span class="src">${esc(j.source || "")}</span><span class="faint">${esc(L.jobState[j.state])} · ${esc(fmtTime(j.started))}</span></button>${j.undoable ? `<button class="btn small" data-undo="${j.id}">${esc(L.undo)}</button>` : ""}</div>
         ${j.error ? `<div class="err">${esc(j.error)}</div>` : ""}
         ${open && j.log.length ? `<pre data-log="${j.id}">${esc(j.log.join("\n"))}</pre>` : ""}
       </div>`;
@@ -472,7 +535,7 @@ function renderInstalled() {
       ${sel.some(hasUpdate) ? `<button class="btn small primary" data-bulk="update">${esc(L.update)}</button>` : ""}
       <button class="btn small danger" data-bulk="remove">${esc(L.remove)}</button>
       <button class="btn small ghost" data-bulk="clear">${esc(L.clearSel)}</button></div>` : ""}
-    ${S.removed.length ? `<div class="notice" title="${esc(S.removed.map(r => r.source).join("\n"))}">${esc(L.removedNote(S.removed.map(r => r.source.replace(/^(npm:|git:)/, "").replace(/[\\/]+$/, "").replace(/(.)@[^/]*$/, "$1").split(/[\\/]/).pop()).join(LANG === "zh" ? "、" : ", ")))}</div>` : ""}
+    ${S.removed.length ? `<div class="notice" title="${esc(S.removed.map(r => r.source).join("\n"))}">${esc(L.removedNote(S.removed.map(r => shortName(r.source)).join(LANG === "zh" ? "、" : ", ")))}</div>` : ""}
     <div class="list">${!S.loaded ? `<div class="empty"><span class="spin"></span></div>` : !S.packages.length ? `<div class="empty">${esc(L.empty)}</div>` : !list.length ? `<div class="empty">${esc(L.noMatch)}</div>` : list.map(pkgRow).join("")}</div>`;
   $("src").value = typed;
   if (focus && $(focus)) { $(focus).focus(); try { if (caret != null) $(focus).setSelectionRange(caret, caret); } catch {} }
@@ -560,6 +623,7 @@ document.addEventListener("click", e => {
   if (d.view) { S.view = d.view; render(); return; }
   if (d.files) { S.open.has(d.files) ? S.open.delete(d.files) : S.open.add(d.files); render(); return; }
   if (d.job) { const id = Number(d.job); S.openJobs.has(id) ? S.openJobs.delete(id) : S.openJobs.add(id); render(); return; }
+  if (d.undo) { undo(Number(d.undo)); return; }
   if (d.act === "clear-jobs") { act(() => api("/jobs/clear", {})); return; }
   if (d.act === "check") { checkUpdates(); return; }
   if (d.act === "update-all") { startJob("/update", { all: true }); return; }
@@ -599,6 +663,7 @@ document.addEventListener("submit", async e => {
   if (e.target.id === "searchForm") runSearch();
 });
 $("reloadBtn").addEventListener("click", reloadPi);
+$("cancelReloadBtn").addEventListener("click", cancelReload);
 
 render();
 loadPackages().then(() => {
