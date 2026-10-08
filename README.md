@@ -19,7 +19,7 @@
 ## 安装
 
 ```bash
-pi install git:github.com/woertedetiankong/pi-mange     # 或本地路径：pi install /path/to/pi-manage
+pi install git:github.com/woertedetiankong/pi-manage    # 或本地路径：pi install /path/to/pi-manage
 ```
 
 ## 使用
